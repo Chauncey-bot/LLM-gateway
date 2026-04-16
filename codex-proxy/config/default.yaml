@@ -1,0 +1,44 @@
+api:
+  base_url: https://chatgpt.com/backend-api
+  timeout_seconds: 60
+client:
+  originator: Codex Desktop
+  app_version: 26.311.21342
+  build_number: "993"
+  platform: darwin
+  arch: arm64
+  chromium_version: "144"
+model:
+  default: gpt-5.2-codex
+  default_reasoning_effort: medium
+  default_service_tier: null
+  inject_desktop_context: false
+  suppress_desktop_directives: true
+auth:
+  jwt_token: null
+  chatgpt_oauth: true
+  refresh_margin_seconds: 300
+  rotation_strategy: least_used
+  rate_limit_backoff_seconds: 60
+  oauth_client_id: app_EMoamEEZ73f0CkXaXp7hrann
+  oauth_auth_endpoint: https://auth.openai.com/oauth/authorize
+  oauth_token_endpoint: https://auth.openai.com/oauth/token
+server:
+  host: "::"
+  port: 8080
+  proxy_api_key: pwd
+session:
+  ttl_minutes: 60
+  cleanup_interval_minutes: 5
+tls:
+  transport: auto
+  curl_binary: auto
+  impersonate_profile: chrome144
+  proxy_url: null
+  force_http11: true
+quota:
+  refresh_interval_minutes: 5
+  warning_thresholds:
+    primary: [80, 90]
+    secondary: [80, 90]
+  skip_exhausted: true

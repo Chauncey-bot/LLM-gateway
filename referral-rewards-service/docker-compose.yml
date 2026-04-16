@@ -1,0 +1,20 @@
+services:
+  referral-rewards:
+    image: referral-rewards-service:latest
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:18191:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../zhisales-pay-service/catalog.json:/app/catalog.json:ro
+    networks:
+      - sub2api-net
+
+networks:
+  sub2api-net:
+    external: true
+    name: sub2api-v01104-official_sub2api-network

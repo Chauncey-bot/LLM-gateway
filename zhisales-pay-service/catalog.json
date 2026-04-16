@@ -1,0 +1,84 @@
+{
+  "subscriptions": [
+    {
+      "code": "coding-plan-daily-80",
+      "enabled": true,
+      "title": "OpenAI 80 Daily Monthly",
+      "description": "200 RMB per month, 80 USD daily limit.",
+      "amount_cents": 20000,
+      "group_id": 10,
+      "validity_days": 30
+    },
+    {
+      "code": "coding-plan-daily-200",
+      "enabled": true,
+      "title": "OpenAI 200 Daily Monthly",
+      "description": "500 RMB per month, 200 USD daily limit.",
+      "amount_cents": 50000,
+      "group_id": 5,
+      "validity_days": 30
+    },
+    {
+      "code": "coding-plan-daily-1-test",
+      "enabled": true,
+      "title": "OpenAI 1 Daily Test",
+      "description": "0.99 RMB test plan, 1 USD daily limit.",
+      "amount_cents": 99,
+      "group_id": 14,
+      "validity_days": 30
+    },
+    {
+      "code": "coding-plan-daily-800",
+      "enabled": false,
+      "title": "OpenAI 800 Daily",
+      "description": "Fill amount_cents before enabling this SKU.",
+      "amount_cents": 0,
+      "group_id": 12,
+      "validity_days": 30
+    },
+    {
+      "code": "claude-daily-80",
+      "enabled": false,
+      "title": "Claude 80 Daily",
+      "description": "Fill amount_cents before enabling this SKU.",
+      "amount_cents": 0,
+      "group_id": 11,
+      "validity_days": 30
+    },
+    {
+      "code": "claude-coding-200",
+      "enabled": false,
+      "title": "Claude 200 Daily",
+      "description": "Fill amount_cents before enabling this SKU.",
+      "amount_cents": 0,
+      "group_id": 9,
+      "validity_days": 30
+    }
+  ],
+  "balance_packs": [
+    {
+      "code": "balance-50",
+      "enabled": false,
+      "title": "Balance 50",
+      "description": "Fill amount_cents before enabling this SKU.",
+      "amount_cents": 0,
+      "balance_amount": 50
+    },
+    {
+      "code": "balance-100",
+      "enabled": false,
+      "title": "Balance 100",
+      "description": "Fill amount_cents before enabling this SKU.",
+      "amount_cents": 0,
+      "balance_amount": 100
+    },
+    {
+      "code": "balance-300",
+      "enabled": false,
+      "title": "Balance 300",
+      "description": "Fill amount_cents before enabling this SKU.",
+      "amount_cents": 0,
+      "balance_amount": 300
+    }
+  ]
+}

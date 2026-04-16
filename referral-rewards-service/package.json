@@ -1,0 +1,15 @@
+{
+  "name": "referral-rewards-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "bootstrap:rules": "node scripts/bootstrap-rules.mjs",
+    "smoke:test": "node scripts/smoke-test.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.3"
+  }
+}

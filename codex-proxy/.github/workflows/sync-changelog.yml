@@ -1,0 +1,94 @@
+name: Sync CHANGELOG to README
+
+on:
+  push:
+    branches: [master]
+    paths: [CHANGELOG.md]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract recent changelog highlights and update README
+        run: |
+          node - <<'JSEOF'
+          const fs = require("fs");
+
+          const changelog = fs.readFileSync("CHANGELOG.md", "utf-8").replace(/\r\n/g, "\n");
+          const readme = fs.readFileSync("README.md", "utf-8").replace(/\r\n/g, "\n");
+
+          const MAX_VERSIONS = 3;
+          const MAX_ITEMS = 5;
+
+          // Split into version sections by "## " headings
+          const sections = changelog.split(/(?=^## )/m).filter(s => s.startsWith("## "));
+
+          let output = [];
+          let count = 0;
+
+          for (const section of sections) {
+            if (count >= MAX_VERSIONS) break;
+
+            // Extract version title line (first line)
+            const titleLine = section.split("\n")[0];
+
+            // Extract "### Added" block
+            const addedMatch = section.match(/### Added\n([\s\S]*?)(?=\n### |\n## |$)/);
+            if (!addedMatch) continue; // skip versions without Added
+
+            // Parse items (lines starting with "- ")
+            const items = addedMatch[1].trim().split("\n").filter(l => l.startsWith("- "));
+            if (items.length === 0) continue;
+
+            // Demote "## " to "### " for README context
+            const demotedTitle = titleLine.replace(/^## /, "### ");
+            output.push(demotedTitle);
+            output.push("");
+
+            const shown = items.slice(0, MAX_ITEMS);
+            // Shorten each item to first sentence (up to first Chinese period or newline)
+            for (const item of shown) {
+              output.push(item);
+            }
+
+            if (items.length > MAX_ITEMS) {
+              output.push(`- ...（[查看全部更新](./CHANGELOG.md)）`);
+            }
+
+            output.push("");
+            count++;
+          }
+
+          if (output.length === 0) {
+            console.log("No Added sections found in CHANGELOG.md");
+            process.exit(0);
+          }
+
+          const content = output.join("\n").trim();
+          const pattern = /(<!-- CHANGELOG:START -->)[\s\S]*?(<!-- CHANGELOG:END -->)/;
+          const replacement = `<!-- CHANGELOG:START -->\n${content}\n<!-- CHANGELOG:END -->`;
+          const newReadme = readme.replace(pattern, replacement);
+
+          if (newReadme === readme) {
+            console.log("README unchanged");
+            process.exit(0);
+          }
+
+          fs.writeFileSync("README.md", newReadme, "utf-8");
+          console.log(`Updated README with ${count} changelog section(s)`);
+          JSEOF
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --quiet README.md && echo "No changes" && exit 0
+          git add README.md
+          git commit -m "docs: auto-sync changelog to README [skip ci]"
+          git push

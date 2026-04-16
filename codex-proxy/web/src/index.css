@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: 16 162 53;
+  --primary-hover: 14 140 46;
+  color-scheme: light;
+}
+
+.dark {
+  --primary: 16 163 127;
+  --primary-hover: 14 140 108;
+  color-scheme: dark;
+}
+
+/* Dark scrollbar for code blocks */
+pre::-webkit-scrollbar { height: 8px; }
+pre::-webkit-scrollbar-track { background: #0d1117; }
+pre::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+pre::-webkit-scrollbar-thumb:hover { background: #8b949e; }
+
+/* ── Electron macOS: native titlebar integration ────────────────── */
+/* .electron-mac is added to <html> by electron/main.ts at runtime  */
+
+/* Header becomes a draggable titlebar region */
+.electron-mac header {
+  -webkit-app-region: drag;
+}
+
+/* Interactive elements inside header must remain clickable */
+.electron-mac header button,
+.electron-mac header a,
+.electron-mac header input,
+.electron-mac header select {
+  -webkit-app-region: no-drag;
+}
+
+/* Extra top padding so header content clears the traffic lights vertically */
+.electron-mac header > div {
+  padding-top: 6px;
+}
+
+/* Left padding so logo/title doesn't overlap the traffic lights (≈ 72px) */
+.electron-mac header > div > div {
+  padding-left: 72px;
+}

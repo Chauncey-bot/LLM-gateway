@@ -1,0 +1,203 @@
+name: Release Electron App
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.0.57)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+            artifact: windows
+          - os: macos-latest
+            platform: mac
+            arch: arm64
+            artifact: macos-arm64
+          - os: ubuntu-latest
+            platform: linux
+            artifact: linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install all workspace dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Setup curl-impersonate
+        run: npx tsx scripts/setup-curl.ts ${{ matrix.arch && format('--arch {0}', matrix.arch) || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install web frontend dependencies
+        run: cd web && npm ci
+
+      - name: Install desktop frontend dependencies
+        run: cd packages/electron/desktop && npm ci
+
+      - name: Build core (web + tsc)
+        run: npm run build
+
+      - name: Build desktop frontend
+        run: cd packages/electron/desktop && npx vite build
+
+      - name: Bundle Electron (esbuild)
+        working-directory: packages/electron
+        run: node electron/build.mjs
+
+      - name: Prepare pack (copy root resources)
+        working-directory: packages/electron
+        run: node electron/prepare-pack.mjs
+
+      - name: Clean stale release assets
+        continue-on-error: true
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          ASSETS=$(gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null || echo "")
+          [ -z "$ASSETS" ] && exit 0
+
+          case "${{ matrix.platform }}" in
+            mac) PATTERN="${{ matrix.arch }}" ;;
+            win) PATTERN="(Setup|\.exe|\.nsis|win)" ;;
+            linux) PATTERN="(AppImage|linux)" ;;
+          esac
+
+          echo "$ASSETS" | grep -iE "$PATTERN" | while read -r name; do
+            echo "Removing stale asset: $name"
+            gh release delete-asset "$TAG" "$name" -y 2>/dev/null || true
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pack (${{ matrix.platform }}${{ matrix.arch && format('-{0}', matrix.arch) || '' }})
+        working-directory: packages/electron
+        run: npx electron-builder --config electron-builder.yml --${{ matrix.platform }} ${{ matrix.arch && format('--{0}', matrix.arch) || '' }} --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # macOS x64 runs AFTER arm64 to avoid release asset upload collisions
+  # (shared files like latest-mac.yml don't include arch in the name)
+  build-mac-x64:
+    needs: build
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install all workspace dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Setup curl-impersonate
+        run: npx tsx scripts/setup-curl.ts --arch x64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install web frontend dependencies
+        run: cd web && npm ci
+
+      - name: Install desktop frontend dependencies
+        run: cd packages/electron/desktop && npm ci
+
+      - name: Build core (web + tsc)
+        run: npm run build
+
+      - name: Build desktop frontend
+        run: cd packages/electron/desktop && npx vite build
+
+      - name: Bundle Electron (esbuild)
+        working-directory: packages/electron
+        run: node electron/build.mjs
+
+      - name: Prepare pack (copy root resources)
+        working-directory: packages/electron
+        run: node electron/prepare-pack.mjs
+
+      - name: Pack (mac-x64)
+        working-directory: packages/electron
+        run: npx electron-builder --config electron-builder.yml --mac --x64 --publish never
+
+      - name: Upload x64 artifacts to release
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          cd packages/electron/release
+          for f in *; do
+            [ -f "$f" ] || continue
+            # Skip arm64 files and yml manifests (arm64 build already uploaded these)
+            echo "$f" | grep -qi "arm64" && continue
+            echo "$f" | grep -qiE "\.yml$" && continue
+            echo "Uploading: $f"
+            gh release upload "$TAG" "$f" --clobber 2>/dev/null || true
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    needs: [build, build-mac-x64]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          echo "name=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes and publish
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | grep -v "^${TAG}$" | head -1)
+          if [ -z "$PREV_TAG" ]; then
+            BODY="Initial release"
+          else
+            BODY=$(git log "${PREV_TAG}..${TAG}" --no-merges --pretty=format:"%s" \
+              | grep -vE "^(chore|docs|ci)(\(.*\))?:" \
+              | sed 's/^/- /')
+            if [ -z "$BODY" ]; then
+              BODY="Bug fixes and improvements"
+            fi
+          fi
+          echo "$BODY" > /tmp/release-notes.md
+          gh release edit "$TAG" --draft=false --notes-file /tmp/release-notes.md 2>/dev/null || \
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/release-notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
