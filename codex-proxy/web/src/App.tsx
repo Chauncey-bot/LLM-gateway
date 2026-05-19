@@ -14,7 +14,6 @@ import { QuotaSettings } from "./components/QuotaSettings";
 import { TestConnection } from "./components/TestConnection";
 import { Footer } from "./components/Footer";
 import { ProxySettings } from "./pages/ProxySettings";
-import { WechatSupportCard } from "../../shared/components/WechatSupportCard";
 import { useAccounts } from "../../shared/hooks/use-accounts";
 import { useProxies } from "../../shared/hooks/use-proxies";
 import { useStatus } from "../../shared/hooks/use-status";
@@ -152,7 +151,6 @@ function Dashboard() {
           <SettingsPanel />
           <QuotaSettings />
           <TestConnection />
-          <WechatSupportCard />
         </div>
       </main>
       <Footer updateStatus={update.status} />
