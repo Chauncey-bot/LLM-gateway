@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import pg from "pg";
 
+import { buildOrderFulfillmentRequest } from "./subscription-fulfillment.mjs";
+
 const { Pool } = pg;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -265,10 +267,6 @@ async function listUserSubscriptions(userId) {
   return Array.isArray(data?.items) ? data.items : [];
 }
 
-function pickMatchingSubscription(subscriptions, groupId) {
-  return subscriptions.find((item) => Number(item.group_id) === Number(groupId)) || null;
-}
-
 async function notifyReferralReward(order) {
   if (!config.referralRewardsBaseUrl || !config.referralRewardsInternalKey) {
     return { sent: false, skipped: true, reason: "referral rewards callback not configured" };
@@ -314,39 +312,13 @@ async function fulfillOrder(order, client) {
     return order;
   }
 
-  const notes = `payment:${order.merchant_order_id}`;
   try {
-    if (order.sku_type === "subscription") {
-      const subscriptions = await listUserSubscriptions(order.user_id);
-      const existing = pickMatchingSubscription(subscriptions, order.group_id);
-      if (existing) {
-        await sub2apiAdminJson(`/api/v1/admin/subscriptions/${existing.id}/extend`, {
-          method: "POST",
-          body: { days: Number(order.validity_days) },
-        });
-      } else {
-        await sub2apiAdminJson("/api/v1/admin/subscriptions/assign", {
-          method: "POST",
-          body: {
-            user_id: Number(order.user_id),
-            group_id: Number(order.group_id),
-            validity_days: Number(order.validity_days),
-            notes,
-          },
-        });
-      }
-    } else if (order.sku_type === "balance") {
-      await sub2apiAdminJson(`/api/v1/admin/users/${order.user_id}/balance`, {
-        method: "POST",
-        body: {
-          balance: Number(order.balance_amount),
-          operation: "add",
-          notes,
-        },
-      });
-    } else {
-      throw new Error(`Unsupported sku_type: ${order.sku_type}`);
-    }
+    const subscriptions = order.sku_type === "subscription" ? await listUserSubscriptions(order.user_id) : [];
+    const fulfillment = buildOrderFulfillmentRequest(order, subscriptions);
+    await sub2apiAdminJson(fulfillment.path, {
+      method: "POST",
+      body: fulfillment.body,
+    });
 
     const { rows } = await client.query(
       `
@@ -999,7 +971,11 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  console.error("[zhisales-pay-service] fatal:", error);
-  process.exit(1);
-});
+const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isMainModule) {
+  main().catch((error) => {
+    console.error("[zhisales-pay-service] fatal:", error);
+    process.exit(1);
+  });
+}
