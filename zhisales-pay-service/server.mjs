@@ -40,6 +40,8 @@ const adminSession = {
   token: null,
   expiresAt: 0,
 };
+const paymentPollIntervalMs = Number(process.env.PAYMENT_POLL_INTERVAL_MS || 60_000);
+let paymentPollTimer = null;
 
 app.use(express.json({ limit: "512kb" }));
 
@@ -357,6 +359,101 @@ async function fulfillOrder(order, client) {
     );
     return rows[0];
   }
+}
+
+async function reconcilePendingPaymentOrders(limit = 20) {
+  if (!isQueryConfigured()) {
+    return { scanned: 0, fulfilled: 0, skipped: true };
+  }
+
+  const client = await pool.connect();
+  let fulfilled = 0;
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `
+      SELECT *
+      FROM payment_orders
+      WHERE fulfillment_status = 'pending'
+        AND trade_status IN ('created', 'pending', 'paid')
+      ORDER BY created_at ASC
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED
+      `,
+      [limit],
+    );
+
+    for (const row of rows) {
+      let order = row;
+      if (order.trade_status !== "paid") {
+        const queryResult = await queryTrade(order);
+        if (queryResult.normalizedStatus) {
+          const update = await client.query(
+            `
+            UPDATE payment_orders
+            SET trade_status = $2,
+                platform_order_no = COALESCE($3, platform_order_no),
+                raw_query_response = $4,
+                last_checked_at = NOW(),
+                updated_at = NOW()
+            WHERE merchant_order_id = $1
+            RETURNING *
+            `,
+            [
+              order.merchant_order_id,
+              queryResult.normalizedStatus,
+              queryResult.platformOrderNo || null,
+              JSON.stringify(queryResult.raw || null),
+            ],
+          );
+          order = update.rows[0];
+        }
+      }
+
+      if (order.trade_status === "paid" && order.fulfillment_status !== "fulfilled") {
+        order = await fulfillOrder(order, client);
+        if (order.fulfillment_status === "fulfilled") {
+          fulfilled += 1;
+        }
+      }
+    }
+
+    await client.query("COMMIT");
+    return { scanned: rows.length, fulfilled, skipped: false };
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function startPaymentOrderPoller() {
+  if (paymentPollTimer || paymentPollIntervalMs <= 0) {
+    return;
+  }
+
+  const run = async () => {
+    try {
+      const result = await reconcilePendingPaymentOrders();
+      if (!result.skipped && result.scanned > 0) {
+        console.log(
+          `[zhisales-pay-service] payment poller scanned=${result.scanned} fulfilled=${result.fulfilled}`,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        "[zhisales-pay-service] payment poller failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  };
+
+  paymentPollTimer = setInterval(run, paymentPollIntervalMs);
+  paymentPollTimer.unref?.();
+  setTimeout(run, 10_000).unref?.();
 }
 
 async function queryTrade(order) {
@@ -966,6 +1063,7 @@ app.post("/pay-api/orders/:merchantOrderId/check", async (req, res) => {
 
 async function main() {
   await initDb();
+  startPaymentOrderPoller();
   app.listen(config.port, () => {
     console.log(`[zhisales-pay-service] listening on :${config.port}`);
   });
