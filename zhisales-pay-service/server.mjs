@@ -385,36 +385,61 @@ async function reconcilePendingPaymentOrders(limit = 20) {
 
     for (const row of rows) {
       let order = row;
-      if (order.trade_status !== "paid") {
-        const queryResult = await queryTrade(order);
-        if (queryResult.normalizedStatus) {
-          const update = await client.query(
+      try {
+        if (order.trade_status !== "paid") {
+          const queryResult = await queryTrade(order);
+          if (queryResult.normalizedStatus) {
+            const update = await client.query(
+              `
+              UPDATE payment_orders
+              SET trade_status = $2,
+                  platform_order_no = COALESCE($3, platform_order_no),
+                  raw_query_response = $4,
+                  last_checked_at = NOW(),
+                  updated_at = NOW()
+              WHERE merchant_order_id = $1
+              RETURNING *
+              `,
+              [
+                order.merchant_order_id,
+                queryResult.normalizedStatus,
+                queryResult.platformOrderNo || null,
+                JSON.stringify(queryResult.raw || null),
+              ],
+            );
+            order = update.rows[0];
+          }
+        }
+
+        if (order.trade_status === "paid" && order.fulfillment_status !== "fulfilled") {
+          order = await fulfillOrder(order, client);
+          if (order.fulfillment_status === "fulfilled") {
+            fulfilled += 1;
+          }
+        }
+      } catch (error) {
+        if (isTradeNotExistError(error) && isOlderThan(order.created_at, 15)) {
+          await client.query(
             `
             UPDATE payment_orders
-            SET trade_status = $2,
-                platform_order_no = COALESCE($3, platform_order_no),
-                raw_query_response = $4,
+            SET trade_status = 'closed',
+                error_message = COALESCE(error_message, $2),
                 last_checked_at = NOW(),
                 updated_at = NOW()
             WHERE merchant_order_id = $1
-            RETURNING *
             `,
             [
               order.merchant_order_id,
-              queryResult.normalizedStatus,
-              queryResult.platformOrderNo || null,
-              JSON.stringify(queryResult.raw || null),
+              error instanceof Error ? error.message : String(error),
             ],
           );
-          order = update.rows[0];
+          continue;
         }
-      }
 
-      if (order.trade_status === "paid" && order.fulfillment_status !== "fulfilled") {
-        order = await fulfillOrder(order, client);
-        if (order.fulfillment_status === "fulfilled") {
-          fulfilled += 1;
-        }
+        console.warn(
+          `[zhisales-pay-service] payment poller skipped ${order.merchant_order_id}:`,
+          error instanceof Error ? error.message : error,
+        );
       }
     }
 
@@ -454,6 +479,18 @@ function startPaymentOrderPoller() {
   paymentPollTimer = setInterval(run, paymentPollIntervalMs);
   paymentPollTimer.unref?.();
   setTimeout(run, 10_000).unref?.();
+}
+
+function isTradeNotExistError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("TRADE_NOT_EXIST") || message.includes("交易不存在");
+}
+
+function isOlderThan(dateValue, minutes) {
+  if (!dateValue) return false;
+  const timestamp = new Date(dateValue).getTime();
+  if (!Number.isFinite(timestamp)) return false;
+  return Date.now() - timestamp > minutes * 60_000;
 }
 
 async function queryTrade(order) {
