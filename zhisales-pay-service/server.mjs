@@ -44,6 +44,7 @@ const paymentPollIntervalMs = Number(process.env.PAYMENT_POLL_INTERVAL_MS || 60_
 let paymentPollTimer = null;
 
 app.use(express.json({ limit: "512kb" }));
+app.use(express.urlencoded({ extended: false, limit: "512kb" }));
 
 function nowIso() {
   return new Date().toISOString();
@@ -86,6 +87,19 @@ function verifyTradingResponseSignature(payload, secret) {
   return candidate === payload.sign;
 }
 
+function verifyTradingNotificationSignature(payload, secret) {
+  if (!payload?.sign) return false;
+  const candidate = signFields(
+    {
+      code: payload.code,
+      data: typeof payload.data === "string" ? payload.data : payload.data == null ? "" : JSON.stringify(payload.data),
+      message: payload.message,
+    },
+    secret,
+  );
+  return candidate === payload.sign;
+}
+
 function generateMerchantOrderId() {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
   const random = crypto.randomBytes(4).toString("hex").toUpperCase();
@@ -94,6 +108,10 @@ function generateMerchantOrderId() {
 
 function buildReturnUrl(merchantOrderId) {
   return `${config.publicBaseUrl}/purchase/return?merchantOrderId=${encodeURIComponent(merchantOrderId)}`;
+}
+
+function buildNotifyUrl() {
+  return `${config.publicBaseUrl}/pay-api/trading/notify`;
 }
 
 function isQueryConfigured() {
@@ -133,6 +151,27 @@ function normalizeTradingStatus(status) {
     default:
       return "pending";
   }
+}
+
+function safeJsonParse(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTradingNotificationBody(body) {
+  const envelope = body && typeof body === "object" ? body : {};
+  const parsedData = safeJsonParse(envelope.data);
+  const data = parsedData && typeof parsedData === "object"
+    ? parsedData
+    : (envelope.data && typeof envelope.data === "object" ? envelope.data : envelope);
+
+  return { envelope, data };
 }
 
 function readBearerToken(req) {
@@ -183,6 +222,8 @@ async function initDb() {
       error_message TEXT,
       raw_create_response JSONB,
       raw_query_response JSONB,
+      raw_notify_response JSONB,
+      notify_received_at TIMESTAMPTZ,
       last_checked_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -190,6 +231,8 @@ async function initDb() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_payment_orders_user_id ON payment_orders(user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_payment_orders_trade_status ON payment_orders(trade_status);`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS raw_notify_response JSONB;`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS notify_received_at TIMESTAMPTZ;`);
 }
 
 async function sub2apiJson(pathname, options = {}) {
@@ -822,6 +865,7 @@ async function createTradingOrder(order, sku) {
     subject: orderTitleFromSku(sku),
     body: orderBodyFromSku(sku),
     returnurl: buildReturnUrl(order.merchantOrderId),
+    notifyurl: buildNotifyUrl(),
     timestamp: String(Date.now()),
     nonce: generateNonce("pay"),
     clientip: order.clientIp,
@@ -1093,6 +1137,113 @@ app.post("/pay-api/orders/:merchantOrderId/check", async (req, res) => {
       await client.query("ROLLBACK");
     } catch {}
     jsonError(res, 500, error instanceof Error ? error.message : "Failed to check order");
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/pay-api/trading/notify", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { envelope, data } = normalizeTradingNotificationBody(req.body);
+    if (!Object.keys(envelope).length) {
+      return jsonError(res, 400, "Empty notification body");
+    }
+
+    if (config.alipaySign && !verifyTradingNotificationSignature(envelope, config.alipaySign)) {
+      return jsonError(res, 400, "Invalid notification signature");
+    }
+
+    const merchantOrderId =
+      data.orderid ||
+      data.orderId ||
+      data.out_trade_no ||
+      envelope.orderid ||
+      envelope.orderId ||
+      envelope.out_trade_no;
+    if (!merchantOrderId) {
+      return jsonError(res, 400, "Missing merchant order id");
+    }
+
+    const notifiedStatusRaw =
+      data.tradeStatus ||
+      data.trade_status ||
+      data.status ||
+      envelope.tradeStatus ||
+      envelope.trade_status ||
+      envelope.status;
+    const normalizedStatus = normalizeTradingStatus(notifiedStatusRaw);
+    const notifiedAmountCents = amountToCents(
+      data.totalAmount ??
+      data.total_amount ??
+      data.amount ??
+      envelope.totalAmount ??
+      envelope.total_amount ??
+      envelope.amount,
+    );
+    const notifiedPlatformOrderNo =
+      data.orderno ||
+      data.tradeNo ||
+      data.trade_no ||
+      envelope.orderno ||
+      envelope.tradeNo ||
+      envelope.trade_no ||
+      null;
+
+    await client.query("BEGIN");
+    const select = await client.query(
+      `SELECT * FROM payment_orders WHERE merchant_order_id = $1 FOR UPDATE`,
+      [merchantOrderId],
+    );
+    if (!select.rows.length) {
+      await client.query("ROLLBACK");
+      return jsonError(res, 404, "Order not found");
+    }
+
+    let order = select.rows[0];
+    if (normalizedStatus === "paid" && notifiedAmountCents !== null && notifiedAmountCents !== Number(order.amount_cents)) {
+      throw new Error(
+        `Notification amount mismatch: expected ${order.amount_cents}, got ${notifiedAmountCents}`,
+      );
+    }
+
+    if (normalizedStatus && normalizedStatus !== "pending") {
+      const update = await client.query(
+        `
+        UPDATE payment_orders
+        SET trade_status = $2,
+            platform_order_no = COALESCE($3, platform_order_no),
+            raw_notify_response = $4,
+            notify_received_at = NOW(),
+            last_checked_at = NOW(),
+            updated_at = NOW()
+        WHERE merchant_order_id = $1
+        RETURNING *
+        `,
+        [
+          order.merchant_order_id,
+          normalizedStatus,
+          notifiedPlatformOrderNo,
+          JSON.stringify({ envelope, data }),
+        ],
+      );
+      order = update.rows[0];
+    }
+
+    if (order.trade_status === "paid" && order.fulfillment_status !== "fulfilled") {
+      order = await fulfillOrder(order, client);
+    }
+
+    await client.query("COMMIT");
+    res.json({
+      ok: true,
+      order: normalizeOrderRow(order),
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    jsonError(res, 500, error instanceof Error ? error.message : "Failed to process notification");
   } finally {
     client.release();
   }

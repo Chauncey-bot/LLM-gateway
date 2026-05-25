@@ -23,6 +23,13 @@ The service now confirms payments through the Trading open API query endpoint:
 - request parameter: `opt=order_query`
 - response signature verification uses only `code`, `message`, and the raw `data` string
 
+It also registers an asynchronous notify callback at:
+
+- `POST /pay-api/trading/notify`
+
+This notify endpoint is the primary fulfillment trigger. The return page and the background
+poller remain as compensating paths.
+
 When a query returns a paid status, the service will run the existing fulfillment hooks
 idempotently and mark the order as `fulfilled`.
 
