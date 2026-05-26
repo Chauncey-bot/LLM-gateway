@@ -1,0 +1,77 @@
+{{define "content"}}
+<section class="metrics">
+  <article class="metric-card">
+    <span>商品数量</span>
+    <strong>{{.Stats.ProductCount}}</strong>
+  </article>
+  <article class="metric-card">
+    <span>订单数量</span>
+    <strong>{{.Stats.OrderCount}}</strong>
+  </article>
+  <article class="metric-card">
+    <span>累计销售额</span>
+    <strong>{{money .Stats.RevenueCents}}</strong>
+  </article>
+  <article class="metric-card">
+    <span>低库存商品</span>
+    <strong>{{.Stats.LowStock}}</strong>
+  </article>
+</section>
+
+<section class="admin-grid">
+  <div class="panel">
+    <div class="section-head">
+      <h2>最近商品</h2>
+      <a href="/admin/products">管理商品</a>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>商品</th>
+            <th>价格</th>
+            <th>库存</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Products}}
+          <tr>
+            <td>{{.Name}}</td>
+            <td>{{money .PriceCents}}</td>
+            <td>{{.Stock}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="section-head">
+      <h2>最新订单</h2>
+      <a href="/admin/orders">查看全部</a>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>订单号</th>
+            <th>状态</th>
+            <th>金额</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Orders}}
+          <tr>
+            <td>{{.Number}}</td>
+            <td>{{.Status}}</td>
+            <td>{{money .TotalCents}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{{end}}
+

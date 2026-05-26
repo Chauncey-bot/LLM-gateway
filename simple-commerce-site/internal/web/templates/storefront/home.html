@@ -1,0 +1,57 @@
+{{define "content"}}
+<section class="hero">
+  <div>
+    <p class="eyebrow">H5 / Mobile First</p>
+    <h1>把一个简易电商独立站先跑起来</h1>
+    <p class="lead">这是一个 Go 语言版的电商 MVP 骨架，适合继续往商品、订单、支付、会员体系里扩展。</p>
+    <div class="hero-actions">
+      <a class="button primary" href="/catalog">逛逛商品</a>
+      <a class="button ghost" href="/admin/">进入后台</a>
+    </div>
+  </div>
+  <div class="hero-card">
+    <div class="stat">
+      <span>当前分类</span>
+      <strong>{{len .Categories}}</strong>
+    </div>
+    <div class="stat">
+      <span>精选商品</span>
+      <strong>{{len .Products}}</strong>
+    </div>
+    <div class="stat">
+      <span>页面定位</span>
+      <strong>H5 + Web</strong>
+    </div>
+  </div>
+</section>
+
+<section class="section-head">
+  <h2>精选商品</h2>
+  <a href="/catalog">查看全部</a>
+</section>
+
+<div class="product-grid">
+  {{range .Products}}
+  <article class="product-card">
+    <a href="/product/{{.Slug}}">
+      <img src="{{.ImageURL}}" alt="{{.Name}}">
+      <div class="product-body">
+        <p class="tag">{{.Category}}</p>
+        <h3>{{.Name}}</h3>
+        <p class="desc">{{.Description}}</p>
+        <div class="product-meta">
+          <strong>{{money .PriceCents}}</strong>
+          <span>库存 {{.Stock}}</span>
+        </div>
+      </div>
+    </a>
+  </article>
+  {{end}}
+</div>
+
+<section class="note">
+  <h2>项目特点</h2>
+  <p>消费者端更适合手机浏览，管理端则保留桌面 Web 的操作方式，方便后续接数据库、登录和支付流程。</p>
+</section>
+{{end}}
+

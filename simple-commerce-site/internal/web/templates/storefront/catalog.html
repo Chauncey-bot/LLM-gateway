@@ -1,0 +1,29 @@
+{{define "content"}}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">商品列表</p>
+    <h1>所有商品</h1>
+  </div>
+  <a class="button ghost" href="/cart">去购物车</a>
+</section>
+
+<div class="product-grid">
+  {{range .Products}}
+  <article class="product-card">
+    <a href="/product/{{.Slug}}">
+      <img src="{{.ImageURL}}" alt="{{.Name}}">
+      <div class="product-body">
+        <p class="tag">{{.Category}}</p>
+        <h3>{{.Name}}</h3>
+        <p class="desc">{{.Description}}</p>
+        <div class="product-meta">
+          <strong>{{money .PriceCents}}</strong>
+          <span>库存 {{.Stock}}</span>
+        </div>
+      </div>
+    </a>
+  </article>
+  {{end}}
+</div>
+{{end}}
+

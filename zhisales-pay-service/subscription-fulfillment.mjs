@@ -28,6 +28,11 @@ export function pickMatchingSubscription(subscriptions, groupId) {
     })[0];
 }
 
+export function isSubscriptionConflictError(error) {
+  const message = typeof error === "string" ? error : error instanceof Error ? error.message : String(error || "");
+  return message.includes("(409)") || /conflicts with existing assignment semantics/i.test(message);
+}
+
 export function buildSubscriptionFulfillmentRequest(order, subscriptions) {
   const existing = pickMatchingSubscription(subscriptions, order.group_id);
   if (existing) {

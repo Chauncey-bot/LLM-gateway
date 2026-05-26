@@ -3,6 +3,8 @@
 ## 1. `codex-proxy`
 
 - Server: `18.143.67.94`
+- Verified SSH login:
+  - `ssh -i /private/tmp/sg_prod_key ubuntu@18.143.67.94`
 - Current version: `v2.0.57`
 - Running image: `codex-proxy-local:v2.0.57`
 - Stable path: `/opt/codex-proxy -> /opt/codex-proxy-v2.0.57-source`
@@ -101,7 +103,7 @@ Alipay integration status:
 
 Payment flow status:
 
-- Real payment testing has already passed with the `0.99` test plan
+- Real payment testing has already passed
 - Confirmed working end to end:
   - create order
   - payment redirect
@@ -119,15 +121,6 @@ Current product catalog:
   - `¥500 / 30 days`
   - `200 USD daily`
   - `group_id=5`
-- `coding-plan-daily-1-test`
-  - `¥0.99 / 30 days`
-  - `1 USD daily`
-  - `group_id=14`
-
-Test group:
-
-- `group_id=14`
-- name: `coding-plan-daily-1-test`
 
 Important note about updates:
 
@@ -176,7 +169,7 @@ Payment service:
 
 ## 6. Current status and next things to watch
 
-1. The payment flow is already usable and the `0.99` test plan has been validated successfully.
+1. The payment flow is already usable and has been validated successfully.
 2. The most important remaining issue is why `codex-proxy` currently has only `1 active` account out of `6`.
 3. If anyone changes payment products later, updating `catalog.json` alone is not enough; recreate the payment container afterward.
 4. `sub2api` business code itself was not modified. The main changes were:

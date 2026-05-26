@@ -20,7 +20,7 @@
     },
     {
       "code": "coding-plan-daily-1-test",
-      "enabled": true,
+      "enabled": false,
       "title": "OpenAI 1 Daily Test",
       "description": "0.99 RMB test plan, 1 USD daily limit.",
       "amount_cents": 99,

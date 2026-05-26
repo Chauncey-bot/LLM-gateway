@@ -7,6 +7,7 @@ import express from "express";
 import pg from "pg";
 
 import { buildOrderFulfillmentRequest } from "./subscription-fulfillment.mjs";
+import { fulfillSubscriptionWithRetry } from "./subscription-fulfillment-retry.mjs";
 
 const { Pool } = pg;
 
@@ -358,18 +359,30 @@ async function fulfillOrder(order, client) {
   }
 
   try {
-    const subscriptions = order.sku_type === "subscription" ? await listUserSubscriptions(order.user_id) : [];
-    const fulfillment = buildOrderFulfillmentRequest(order, subscriptions);
-    await sub2apiAdminJson(fulfillment.path, {
-      method: "POST",
-      body: fulfillment.body,
-    });
+    if (order.sku_type === "subscription") {
+      await fulfillSubscriptionWithRetry(order, {
+        listSubscriptions: listUserSubscriptions,
+        submitFulfillment: async (fulfillment) => {
+          await sub2apiAdminJson(fulfillment.path, {
+            method: "POST",
+            body: fulfillment.body,
+          });
+        },
+      });
+    } else {
+      const fulfillment = buildOrderFulfillmentRequest(order, []);
+      await sub2apiAdminJson(fulfillment.path, {
+        method: "POST",
+        body: fulfillment.body,
+      });
+    }
 
     const { rows } = await client.query(
       `
       UPDATE payment_orders
       SET fulfillment_status = 'fulfilled',
           fulfilled_at = NOW(),
+          error_message = NULL,
           updated_at = NOW()
       WHERE merchant_order_id = $1
       RETURNING *

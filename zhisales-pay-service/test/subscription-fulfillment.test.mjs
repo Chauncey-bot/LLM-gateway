@@ -11,7 +11,7 @@ test("uses extend when a matching subscription already exists", () => {
     validity_days: 30,
   };
   const subscriptions = [
-    { id: 9988, group_id: 10, expires_at: "2026-06-01T00:00:00Z" },
+    { id: 9988, group_id: 10, status: "active", expires_at: "2026-06-01T00:00:00Z" },
   ];
 
   const result = buildSubscriptionFulfillmentRequest(order, subscriptions);
@@ -53,7 +53,7 @@ test("builds a full subscription fulfillment request for an existing subscriptio
     validity_days: 30,
   };
   const subscriptions = [
-    { id: 9988, group_id: 10, expires_at: "2026-06-01T00:00:00Z" },
+    { id: 9988, group_id: 10, status: "active", expires_at: "2026-06-01T00:00:00Z" },
   ];
 
   const result = buildOrderFulfillmentRequest(order, subscriptions);
