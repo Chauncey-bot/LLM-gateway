@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import pg from "pg";
 
+import { normalizeSubscriptionListResponse } from "./subscription-list.mjs";
+
 const { Pool } = pg;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -201,7 +203,7 @@ async function sub2apiAdminJson(pathname, options = {}) {
 
 async function listUserSubscriptions(userId) {
   const data = await sub2apiAdminJson(`/api/v1/admin/users/${userId}/subscriptions?page=1&page_size=100`);
-  return Array.isArray(data?.items) ? data.items : [];
+  return normalizeSubscriptionListResponse(data);
 }
 
 function pickMatchingSubscription(subscriptions, groupId) {

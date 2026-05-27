@@ -8,6 +8,7 @@ import pg from "pg";
 
 import { buildOrderFulfillmentRequest } from "./subscription-fulfillment.mjs";
 import { fulfillSubscriptionWithRetry } from "./subscription-fulfillment-retry.mjs";
+import { normalizeSubscriptionListResponse } from "./subscription-list.mjs";
 
 const { Pool } = pg;
 
@@ -310,7 +311,7 @@ async function sub2apiAdminJson(pathname, options = {}) {
 
 async function listUserSubscriptions(userId) {
   const data = await sub2apiAdminJson(`/api/v1/admin/users/${userId}/subscriptions?page=1&page_size=100`);
-  return Array.isArray(data?.items) ? data.items : [];
+  return normalizeSubscriptionListResponse(data);
 }
 
 async function notifyReferralReward(order) {
