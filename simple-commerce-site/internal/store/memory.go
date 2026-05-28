@@ -187,6 +187,19 @@ func (s *MemoryStore) CreateOrder(order model.Order) model.Order {
 	return order
 }
 
+func (s *MemoryStore) UpdateOrderStatus(number, status string) (model.Order, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.orders {
+		if s.orders[i].Number == number {
+			s.orders[i].Status = status
+			return s.orders[i], true
+		}
+	}
+	return model.Order{}, false
+}
+
 func (s *MemoryStore) Stats() model.DashboardStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -217,4 +230,3 @@ func (s *MemoryStore) newOrderID() string {
 	s.nextOID++
 	return id
 }
-

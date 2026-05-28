@@ -155,6 +155,36 @@ function normalizeTradingStatus(status) {
   }
 }
 
+function formatPaymentStatusLabel(tradeStatus) {
+  switch (tradeStatus) {
+    case "paid":
+      return "已支付";
+    case "pending":
+      return "待支付";
+    case "closed":
+      return "已关闭";
+    case "failed":
+      return "支付失败";
+    case "refunded":
+      return "已退款";
+    default:
+      return "未知";
+  }
+}
+
+function formatFulfillmentStatusLabel(fulfillmentStatus) {
+  switch (fulfillmentStatus) {
+    case "pending":
+      return "待发放";
+    case "fulfilled":
+      return "已发放";
+    case "fulfillment_failed":
+      return "发放失败";
+    default:
+      return "未知";
+  }
+}
+
 function safeJsonParse(value) {
   if (typeof value !== "string") {
     return null;
@@ -210,6 +240,7 @@ async function initDb() {
       merchant_order_id VARCHAR(64) NOT NULL UNIQUE,
       user_id BIGINT NOT NULL,
       user_email TEXT,
+      user_username TEXT,
       sku_type VARCHAR(32) NOT NULL,
       sku_code VARCHAR(64) NOT NULL,
       group_id BIGINT,
@@ -233,6 +264,7 @@ async function initDb() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_payment_orders_user_id ON payment_orders(user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_payment_orders_trade_status ON payment_orders(trade_status);`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS user_username TEXT;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS raw_notify_response JSONB;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS notify_received_at TIMESTAMPTZ;`);
 }
@@ -629,6 +661,7 @@ function normalizeOrderRow(row) {
     merchantOrderId: row.merchant_order_id,
     userId: Number(row.user_id),
     userEmail: row.user_email,
+    userUsername: row.user_username,
     skuType: row.sku_type,
     skuCode: row.sku_code,
     groupId: row.group_id === null ? null : Number(row.group_id),
@@ -637,13 +670,99 @@ function normalizeOrderRow(row) {
     amountCents: Number(row.amount_cents),
     platformOrderNo: row.platform_order_no,
     tradeStatus: row.trade_status,
+    tradeStatusLabel: formatPaymentStatusLabel(row.trade_status),
     fulfillmentStatus: row.fulfillment_status,
+    fulfillmentStatusLabel: formatFulfillmentStatusLabel(row.fulfillment_status),
     fulfilledAt: row.fulfilled_at,
     errorMessage: row.error_message,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastCheckedAt: row.last_checked_at,
   };
+}
+
+function normalizeOrderListResponse(rows) {
+  return rows.map((row) => normalizeOrderRow(row));
+}
+
+function parseListLimit(value, fallback = 100, max = 200) {
+  const numeric = Number.parseInt(Array.isArray(value) ? value[0] : value, 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+  return Math.min(numeric, max);
+}
+
+function parsePositiveInt(value, fallback = 1) {
+  const numeric = Number.parseInt(Array.isArray(value) ? value[0] : value, 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+  return numeric;
+}
+
+function parseOptionalFilter(value) {
+  const normalized = String(Array.isArray(value) ? value[0] : value || "").trim().toLowerCase();
+  return normalized && normalized !== "all" ? normalized : "";
+}
+
+function buildOrderListFilters(reqQuery, includeUserId = false, allowUserIdentityKeyword = false) {
+  const tradeStatus = parseOptionalFilter(reqQuery.tradeStatus);
+  const fulfillmentStatus = parseOptionalFilter(reqQuery.fulfillmentStatus);
+  const keyword = String(Array.isArray(reqQuery.keyword) ? reqQuery.keyword[0] : reqQuery.keyword || "").trim();
+
+  const where = [];
+  const params = [];
+
+  if (includeUserId) {
+    params.push(null);
+    where.push(`user_id = $${params.length}`);
+  }
+
+  if (tradeStatus) {
+    params.push(tradeStatus);
+    where.push(`trade_status = $${params.length}`);
+  }
+
+  if (fulfillmentStatus) {
+    params.push(fulfillmentStatus);
+    where.push(`fulfillment_status = $${params.length}`);
+  }
+
+  if (keyword) {
+    params.push(`%${keyword}%`);
+    const placeholder = `$${params.length}`;
+    const keywordClauses = [
+      `merchant_order_id ILIKE ${placeholder}`,
+      `sku_code ILIKE ${placeholder}`,
+    ];
+    if (allowUserIdentityKeyword) {
+      keywordClauses.push(`COALESCE(user_email, '') ILIKE ${placeholder}`);
+      keywordClauses.push(`COALESCE(user_username, '') ILIKE ${placeholder}`);
+    }
+    where.push(`(${keywordClauses.join(" OR ")})`);
+  }
+
+  return {
+    tradeStatus,
+    fulfillmentStatus,
+    keyword,
+    whereSql: where.length ? `WHERE ${where.join(" AND ")}` : "",
+    params,
+  };
+}
+
+async function requireCurrentUser(req) {
+  const token = readBearerToken(req);
+  return resolveCurrentUser(token);
+}
+
+async function requireCurrentAdmin(req) {
+  const user = await requireCurrentUser(req);
+  if (String(user.role) !== "admin") {
+    throw new Error("Forbidden");
+  }
+  return user;
 }
 
 function html(mode) {
@@ -667,6 +786,10 @@ function html(mode) {
       .status.ok { border-color: color-mix(in srgb, var(--ok) 40%, var(--line) 60%); }
       .status.warn { border-color: color-mix(in srgb, var(--warn) 40%, var(--line) 60%); }
       .status.err { border-color: color-mix(in srgb, var(--err) 40%, var(--line) 60%); }
+      .status-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-top:12px; }
+      .status-chip { padding:12px 14px; border:1px solid var(--line); border-radius:14px; background:color-mix(in srgb, var(--card) 90%, var(--bg) 10%); }
+      .status-chip .label { display:block; color:var(--muted); font-size:12px; margin-bottom:6px; }
+      .status-chip strong { font-size:15px; }
       .panel { display:grid; grid-template-columns:1fr; gap:20px; }
       .user { padding:18px; border-radius:18px; border:1px solid var(--line); background:var(--card); display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; }
       .user .meta { color:var(--muted); font-size:14px; }
@@ -815,34 +938,41 @@ function html(mode) {
 
         async function loadReturn() {
           titleEl.textContent = '支付结果确认';
-          subtitleEl.textContent = '浏览器回跳只代表支付流程返回，最终结果以服务端查单和发货状态为准。';
+          subtitleEl.textContent = '浏览器回跳只代表支付流程返回，最终结果以服务端查单、支付状态和发放状态为准。';
           const merchantOrderId = qs.get('merchantOrderId');
           if (!merchantOrderId) {
             setStatus('err', '缺少 merchantOrderId，无法确认订单。');
             return;
           }
-          appEl.innerHTML = '<div class="return-box user"><div><strong>订单号</strong><div class="meta mono">' + merchantOrderId + '</div></div></div>';
+          appEl.innerHTML = '<div class="return-box user"><div><strong>订单号</strong><div class="meta mono">' + merchantOrderId + '</div></div><div class="status-grid" id="status-grid"><div class="status-chip"><span class="label">支付状态</span><strong>查询中</strong></div><div class="status-chip"><span class="label">发放状态</span><strong>查询中</strong></div></div></div>';
           async function tick() {
             try {
               const result = await api('/pay-api/orders/' + encodeURIComponent(merchantOrderId) + '/check', { method: 'POST' });
               const order = result.order;
+              const statusGrid = document.getElementById('status-grid');
+              if (statusGrid) {
+                statusGrid.innerHTML =
+                  '<div class="status-chip"><span class="label">支付状态</span><strong>' + (order.tradeStatusLabel || order.tradeStatus || '未知') + '</strong></div>' +
+                  '<div class="status-chip"><span class="label">发放状态</span><strong>' + (order.fulfillmentStatusLabel || order.fulfillmentStatus || '未知') + '</strong></div>' +
+                  '<div class="status-chip"><span class="label">支付流水</span><strong>' + (order.platformOrderNo || '暂无') + '</strong></div>';
+              }
               if (result.querySupported === false) {
                 setStatus('warn', '支付订单已记录，但当前支付查询暂不可用。请稍后重试或联系管理员处理。');
                 return;
               }
               if (order.fulfillmentStatus === 'fulfilled') {
-                setStatus('ok', '支付已确认，订单已发货成功。');
+                setStatus('ok', '支付已确认，订阅/余额已成功发放。');
                 return;
               }
               if (order.fulfillmentStatus === 'fulfillment_failed') {
-                setStatus('err', '支付已确认，但发货失败：' + (order.errorMessage || '未知错误'));
+                setStatus('err', '支付已确认，但发放失败：' + (order.errorMessage || '未知错误'));
                 return;
               }
               if (order.tradeStatus === 'failed' || order.tradeStatus === 'closed' || order.tradeStatus === 'refunded') {
-                setStatus('err', '订单当前状态为 ' + order.tradeStatus + '，未执行发货。');
+                setStatus('err', '订单当前支付状态为 ' + (order.tradeStatusLabel || order.tradeStatus) + '，未执行发放。');
                 return;
               }
-              setStatus('warn', '订单仍在确认中，请稍后刷新或重试。');
+              setStatus('warn', '订单仍在确认中，已支付后会自动进入发放流程，请稍后刷新或重试。');
               setTimeout(tick, 5000);
             } catch (error) {
               setStatus('err', error.message || '查询订单失败');
@@ -1016,6 +1146,7 @@ app.post("/pay-api/orders", async (req, res) => {
       merchantOrderId,
       userId: Number(user.id),
       userEmail: user.email || null,
+      userUsername: user.username || null,
       skuType: sku.type,
       skuCode: sku.code,
       groupId: sku.type === "subscription" ? Number(sku.group_id) : null,
@@ -1029,11 +1160,11 @@ app.post("/pay-api/orders", async (req, res) => {
     const { rows } = await client.query(
       `
       INSERT INTO payment_orders (
-        merchant_order_id, user_id, user_email, sku_type, sku_code, group_id,
+        merchant_order_id, user_id, user_email, user_username, sku_type, sku_code, group_id,
         validity_days, balance_amount, amount_cents, platform_order_no,
         trade_status, fulfillment_status, raw_create_response
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending','pending',$11
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending','pending',$12
       )
       RETURNING *
       `,
@@ -1041,6 +1172,7 @@ app.post("/pay-api/orders", async (req, res) => {
         draftOrder.merchantOrderId,
         draftOrder.userId,
         draftOrder.userEmail,
+        draftOrder.userUsername,
         draftOrder.skuType,
         draftOrder.skuCode,
         draftOrder.groupId,
@@ -1068,8 +1200,7 @@ app.post("/pay-api/orders", async (req, res) => {
 app.get("/pay-api/orders/:merchantOrderId", async (req, res) => {
   const client = await pool.connect();
   try {
-    const token = readBearerToken(req);
-    const user = await resolveCurrentUser(token);
+    const user = await requireCurrentUser(req);
     const { rows } = await client.query(
       `SELECT * FROM payment_orders WHERE merchant_order_id = $1 AND user_id = $2 LIMIT 1`,
       [req.params.merchantOrderId, Number(user.id)],
@@ -1089,11 +1220,171 @@ app.get("/pay-api/orders/:merchantOrderId", async (req, res) => {
   }
 });
 
+app.get("/pay-api/orders", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const user = await requireCurrentUser(req);
+    const pageSize = parseListLimit(req.query.pageSize ?? req.query.limit, 20, 200);
+    const page = parsePositiveInt(req.query.page, 1);
+    const offset = (page - 1) * pageSize;
+    const filters = buildOrderListFilters(req.query, true, false);
+    filters.params[0] = Number(user.id);
+    const countParams = [...filters.params];
+    const countQuery = await client.query(
+      `
+      SELECT COUNT(*)::bigint AS total
+      FROM payment_orders
+      ${filters.whereSql}
+      `,
+      countParams,
+    );
+    const total = Number(countQuery.rows[0]?.total || 0);
+    filters.params.push(pageSize, offset);
+    const { rows } = await client.query(
+      `
+      SELECT *
+      FROM payment_orders
+      ${filters.whereSql}
+      ORDER BY created_at DESC
+      LIMIT $${filters.params.length - 1} OFFSET $${filters.params.length}
+      `,
+      filters.params,
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      orders: normalizeOrderListResponse(rows),
+      querySupported: isQueryConfigured(),
+      page,
+      pageSize,
+      offset,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      tradeStatus: filters.tradeStatus || "all",
+      fulfillmentStatus: filters.fulfillmentStatus || "all",
+      keyword: filters.keyword,
+    });
+  } catch (error) {
+    jsonError(res, 500, error instanceof Error ? error.message : "Failed to list orders");
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/pay-api/admin/orders", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await requireCurrentAdmin(req);
+    const pageSize = parseListLimit(req.query.pageSize ?? req.query.limit, 20, 200);
+    const page = parsePositiveInt(req.query.page, 1);
+    const offset = (page - 1) * pageSize;
+    const filters = buildOrderListFilters(req.query, false, true);
+    const countParams = [...filters.params];
+    const countQuery = await client.query(
+      `
+      SELECT COUNT(*)::bigint AS total
+      FROM payment_orders
+      ${filters.whereSql}
+      `,
+      countParams,
+    );
+    const total = Number(countQuery.rows[0]?.total || 0);
+    filters.params.push(pageSize, offset);
+    const { rows } = await client.query(
+      `
+      SELECT *
+      FROM payment_orders
+      ${filters.whereSql}
+      ORDER BY created_at DESC
+      LIMIT $${filters.params.length - 1} OFFSET $${filters.params.length}
+      `,
+      filters.params,
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      orders: normalizeOrderListResponse(rows),
+      querySupported: isQueryConfigured(),
+      page,
+      pageSize,
+      offset,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      tradeStatus: filters.tradeStatus || "all",
+      fulfillmentStatus: filters.fulfillmentStatus || "all",
+      keyword: filters.keyword,
+    });
+  } catch (error) {
+    const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed to list orders";
+    jsonError(res, message === "Forbidden" ? 403 : 500, message);
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/pay-api/admin/orders/:merchantOrderId/status", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await requireCurrentAdmin(req);
+    const targetStatus = String(req.body?.tradeStatus || "").trim().toLowerCase();
+    if (!["paid", "closed"].includes(targetStatus)) {
+      return jsonError(res, 400, "Unsupported tradeStatus");
+    }
+
+    await client.query("BEGIN");
+    const select = await client.query(
+      `SELECT * FROM payment_orders WHERE merchant_order_id = $1 FOR UPDATE`,
+      [req.params.merchantOrderId],
+    );
+    if (!select.rows.length) {
+      await client.query("ROLLBACK");
+      return jsonError(res, 404, "Order not found");
+    }
+
+    let order = select.rows[0];
+    if (order.trade_status === "paid" || order.trade_status === "refunded") {
+      await client.query("ROLLBACK");
+      return jsonError(res, 400, "Current order status cannot be modified");
+    }
+
+    const update = await client.query(
+      `
+      UPDATE payment_orders
+      SET trade_status = $2,
+          last_checked_at = NOW(),
+          updated_at = NOW(),
+          error_message = CASE WHEN $2 = 'paid' THEN NULL ELSE error_message END
+      WHERE merchant_order_id = $1
+      RETURNING *
+      `,
+      [order.merchant_order_id, targetStatus],
+    );
+    order = update.rows[0];
+
+    if (order.trade_status === "paid" && order.fulfillment_status !== "fulfilled") {
+      order = await fulfillOrder(order, client);
+    }
+
+    await client.query("COMMIT");
+    res.json({
+      ok: true,
+      order: normalizeOrderRow(order),
+      paymentStatus: formatPaymentStatusLabel(order.trade_status),
+      fulfillmentStatus: formatFulfillmentStatusLabel(order.fulfillment_status),
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed to update order status";
+    jsonError(res, message === "Forbidden" ? 403 : 500, message);
+  } finally {
+    client.release();
+  }
+});
+
 app.post("/pay-api/orders/:merchantOrderId/check", async (req, res) => {
   const client = await pool.connect();
   try {
-    const token = readBearerToken(req);
-    const user = await resolveCurrentUser(token);
+    const user = await requireCurrentUser(req);
 
     await client.query("BEGIN");
     const select = await client.query(
@@ -1252,6 +1543,8 @@ app.post("/pay-api/trading/notify", async (req, res) => {
     res.json({
       ok: true,
       order: normalizeOrderRow(order),
+      paymentStatus: formatPaymentStatusLabel(order.trade_status),
+      fulfillmentStatus: formatFulfillmentStatusLabel(order.fulfillment_status),
     });
   } catch (error) {
     try {

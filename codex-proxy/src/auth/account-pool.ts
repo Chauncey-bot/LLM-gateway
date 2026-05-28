@@ -619,12 +619,70 @@ export class AccountPool {
       const accountsFile = getAccountsFile();
       const dir = dirname(accountsFile);
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      const data: AccountsFile = { accounts: [...this.accounts.values()] };
+      const data: AccountsFile = this.buildMergedAccountsSnapshot(accountsFile);
       const tmpFile = accountsFile + ".tmp";
       writeFileSync(tmpFile, JSON.stringify(data, null, 2), "utf-8");
       renameSync(tmpFile, accountsFile);
     } catch (err) {
       console.error("[AccountPool] Failed to persist accounts:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  private buildMergedAccountsSnapshot(accountsFile: string): AccountsFile {
+    const memoryAccounts = [...this.accounts.values()];
+    if (!existsSync(accountsFile)) {
+      return { accounts: memoryAccounts };
+    }
+
+    try {
+      const raw = readFileSync(accountsFile, "utf-8");
+      const persisted = JSON.parse(raw) as AccountsFile;
+      if (!Array.isArray(persisted.accounts)) {
+        return { accounts: memoryAccounts };
+      }
+
+      const merged: AccountEntry[] = [];
+
+      const pushUnique = (entry: AccountEntry): void => {
+        const key = `${entry.id ?? ""}|${entry.email ?? ""}|${entry.accountId ?? ""}|${entry.token ?? ""}`;
+        if (merged.some((item) =>
+          item.id === entry.id ||
+          item.email === entry.email ||
+          item.accountId === entry.accountId ||
+          item.token === entry.token ||
+          `${item.id ?? ""}|${item.email ?? ""}|${item.accountId ?? ""}|${item.token ?? ""}` === key,
+        )) {
+          return;
+        }
+        merged.push(entry);
+      };
+
+      // Start from what's on disk so externally-added accounts are preserved.
+      for (const entry of persisted.accounts) {
+        if (entry && entry.id && entry.token) {
+          pushUnique(entry);
+        }
+      }
+
+      // Overlay the in-memory state so local changes still win for matching entries.
+      for (const entry of memoryAccounts) {
+        if (!entry.id || !entry.token) continue;
+        const idx = merged.findIndex((item) =>
+          item.id === entry.id ||
+          item.email === entry.email ||
+          item.accountId === entry.accountId ||
+          item.token === entry.token,
+        );
+        if (idx >= 0) {
+          merged[idx] = entry;
+        } else {
+          merged.push(entry);
+        }
+      }
+
+      return { accounts: merged };
+    } catch {
+      return { accounts: memoryAccounts };
     }
   }
 

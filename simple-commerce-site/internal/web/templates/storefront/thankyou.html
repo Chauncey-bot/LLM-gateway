@@ -1,7 +1,7 @@
 {{define "content"}}
 <section class="success">
-  <p class="eyebrow">下单成功</p>
-  <h1>订单已创建</h1>
+  <p class="eyebrow">支付成功</p>
+  <h1>订单已支付</h1>
   <p class="lead">订单号：{{.Order.Number}}</p>
   <div class="success-card">
     <div class="summary-row">
@@ -21,7 +21,9 @@
       <strong>{{money .Order.TotalCents}}</strong>
     </div>
   </div>
-  <a class="button primary" href="/catalog">继续购物</a>
+  <div class="hero-actions" style="justify-content:center;">
+    <a class="button primary" href="/catalog">继续购物</a>
+    <a class="button ghost" href="/orders">查看订单</a>
+  </div>
 </section>
 {{end}}
-

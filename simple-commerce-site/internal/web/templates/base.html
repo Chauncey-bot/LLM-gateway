@@ -19,6 +19,7 @@
           <a class="{{if eq .Active "home"}}active{{end}}" href="/">首页</a>
           <a class="{{if eq .Active "catalog"}}active{{end}}" href="/catalog">商品</a>
           <a class="{{if eq .Active "cart"}}active{{end}}" href="/cart">购物车</a>
+          <a class="{{if eq .Active "orders"}}active{{end}}" href="/orders">订单管理</a>
           <a href="/admin/">管理后台</a>
         </nav>
       </header>
@@ -31,7 +32,7 @@
         <nav class="nav">
           <a class="{{if eq .Active "dashboard"}}active{{end}}" href="/admin/">概览</a>
           <a class="{{if eq .Active "products"}}active{{end}}" href="/admin/products">商品</a>
-          <a class="{{if eq .Active "orders"}}active{{end}}" href="/admin/orders">订单</a>
+          <a class="{{if eq .Active "orders"}}active{{end}}" href="/admin/orders">订单管理</a>
           <a href="/">返回前台</a>
         </nav>
       </header>
@@ -44,4 +45,3 @@
 </body>
 </html>
 {{end}}
-

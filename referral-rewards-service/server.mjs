@@ -727,11 +727,21 @@ app.get("/api/referral/me", async (req, res) => {
         `SELECT COUNT(*)::int AS count FROM reward_events WHERE referrer_user_id = $1 AND status = 'rewarded'`,
         [Number(user.id)],
       );
+      const relationshipResult = await client.query(
+        `
+        SELECT referred_user_id, referrer_user_id, source_code, status, bound_at, corrected_at
+        FROM referral_relationships
+        WHERE referred_user_id = $1
+        LIMIT 1
+        `,
+        [Number(user.id)],
+      );
       const accountResult = await client.query(
         `SELECT balance, total_earned, total_spent FROM points_accounts WHERE user_id = $1 LIMIT 1`,
         [Number(user.id)],
       );
       const account = accountResult.rows[0] || { balance: 0, total_earned: 0, total_spent: 0 };
+      const relationship = relationshipResult.rows[0] || null;
       res.setHeader("Cache-Control", "no-store");
       res.json({
         referral_code: profile.referral_code,
@@ -741,6 +751,11 @@ app.get("/api/referral/me", async (req, res) => {
         points_balance: Number(account.balance || 0),
         total_earned: Number(account.total_earned || 0),
         total_spent: Number(account.total_spent || 0),
+        referrer_user_id: relationship ? Number(relationship.referrer_user_id) : null,
+        referrer_source_code: relationship?.source_code || "",
+        referral_relationship_status: relationship?.status || "",
+        referral_bound_at: relationship?.bound_at || null,
+        referral_corrected_at: relationship?.corrected_at || null,
       });
     } finally {
       client.release();

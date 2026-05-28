@@ -33,6 +33,12 @@ poller remain as compensating paths.
 When a query returns a paid status, the service will run the existing fulfillment hooks
 idempotently and mark the order as `fulfilled`.
 
+Order status payloads exposed by `/pay-api/orders/:merchantOrderId`,
+`/pay-api/orders/:merchantOrderId/check`, and the return page now include both:
+
+- payment status: `paid` / `pending` / `closed` / `failed` / `refunded`
+- fulfillment status: `pending` / `fulfilled` / `fulfillment_failed`
+
 ## Referral rewards callback
 
 If both of the following env vars are configured, the payment service will notify the

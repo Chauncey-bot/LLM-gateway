@@ -60,12 +60,19 @@ type storefrontPageData struct {
 	Message    string
 }
 
+type ordersPageData struct {
+	BaseData
+	Orders []model.Order
+	Query  string
+	Count  int
+}
+
 type adminPageData struct {
 	BaseData
-	Stats   model.DashboardStats
+	Stats    model.DashboardStats
 	Products []model.Product
 	Orders   []model.Order
-	Message string
+	Message  string
 }
 
 type cartLineView struct {
@@ -90,6 +97,8 @@ func (a *App) handleStorefront(w http.ResponseWriter, r *http.Request) {
 		a.cart(w, r)
 	case r.URL.Path == "/cart/add" && r.Method == http.MethodPost:
 		a.cartAdd(w, r)
+	case r.URL.Path == "/orders" && r.Method == http.MethodGet:
+		a.orders(w, r)
 	case r.URL.Path == "/checkout" && r.Method == http.MethodPost:
 		a.checkout(w, r)
 	case strings.HasPrefix(r.URL.Path, "/thank-you/") && r.Method == http.MethodGet:
@@ -109,6 +118,8 @@ func (a *App) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		a.adminCreateProduct(w, r)
 	case r.URL.Path == "/admin/orders" && r.Method == http.MethodGet:
 		a.adminOrders(w, r)
+	case r.URL.Path == "/admin/orders/pay" && r.Method == http.MethodPost:
+		a.adminMarkOrderPaid(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -252,7 +263,7 @@ func (a *App) checkout(w http.ResponseWriter, r *http.Request) {
 		Address:      strings.TrimSpace(r.FormValue("address")),
 		Lines:        make([]model.OrderLine, 0, len(lines)),
 		TotalCents:   subtotal,
-		Status:       "待确认",
+		Status:       "已支付",
 	}
 
 	for _, line := range lines {
@@ -285,11 +296,31 @@ func (a *App) thankYou(w http.ResponseWriter, r *http.Request) {
 
 	data := storefrontPageData{
 		BaseData: BaseData{
-			Title:   "下单成功",
+			Title:   "支付成功",
 			Section: "storefront",
 			Active:  "home",
 		},
 		Order: order,
+	}
+	a.renderer.Render(w, "base", data)
+}
+
+func (a *App) orders(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	orders := a.paidOrders()
+	if query != "" {
+		orders = filterOrdersByQuery(orders, query)
+	}
+
+	data := ordersPageData{
+		BaseData: BaseData{
+			Title:   "订单管理",
+			Section: "storefront",
+			Active:  "orders",
+		},
+		Orders: orders,
+		Query:  query,
+		Count:  len(orders),
 	}
 	a.renderer.Render(w, "base", data)
 }
@@ -301,9 +332,9 @@ func (a *App) adminDashboard(w http.ResponseWriter, r *http.Request) {
 			Section: "admin",
 			Active:  "dashboard",
 		},
-		Stats:   a.store.Stats(),
+		Stats:    a.store.Stats(),
 		Products: a.store.ListProducts(),
-		Orders:  a.store.ListOrders(),
+		Orders:   a.store.ListOrders(),
 	}
 	a.renderer.Render(w, "base", data)
 }
@@ -330,6 +361,26 @@ func (a *App) adminOrders(w http.ResponseWriter, r *http.Request) {
 		Orders: a.store.ListOrders(),
 	}
 	a.renderer.Render(w, "base", data)
+}
+
+func (a *App) adminMarkOrderPaid(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+
+	number := strings.TrimSpace(r.FormValue("order_number"))
+	if number == "" {
+		http.Error(w, "order number is required", http.StatusBadRequest)
+		return
+	}
+
+	if _, ok := a.store.UpdateOrderStatus(number, "已支付"); !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	http.Redirect(w, r, "/admin/orders", http.StatusFound)
 }
 
 func (a *App) adminCreateProduct(w http.ResponseWriter, r *http.Request) {
@@ -408,6 +459,44 @@ func (a *App) findOrder(number string) (model.Order, bool) {
 		}
 	}
 	return model.Order{}, false
+}
+
+func (a *App) paidOrders() []model.Order {
+	orders := a.store.ListOrders()
+	items := make([]model.Order, 0, len(orders))
+	for _, order := range orders {
+		if isPaidOrder(order) {
+			items = append(items, order)
+		}
+	}
+	return items
+}
+
+func filterOrdersByQuery(orders []model.Order, query string) []model.Order {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return orders
+	}
+
+	items := make([]model.Order, 0, len(orders))
+	for _, order := range orders {
+		if strings.Contains(strings.ToLower(order.Number), query) ||
+			strings.Contains(strings.ToLower(order.CustomerName), query) ||
+			strings.Contains(strings.ToLower(order.Phone), query) ||
+			strings.Contains(strings.ToLower(order.Address), query) {
+			items = append(items, order)
+		}
+	}
+	return items
+}
+
+func isPaidOrder(order model.Order) bool {
+	switch strings.TrimSpace(order.Status) {
+	case "已支付", "支付成功", "支付完成", "已完成", "已付款", "交易成功", "paid", "success":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *App) readCartCookie(r *http.Request) map[string]int {
