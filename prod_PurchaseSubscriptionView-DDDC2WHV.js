@@ -197,66 +197,6 @@ const PURCHASE_PAGE_FALLBACK_STYLE=`
   cursor: not-allowed;
 }
 
-@media (prefers-color-scheme: dark) {
-  .purchase-page-shell {
-    border-color: rgba(255, 255, 255, 0.12);
-    background: rgba(2, 6, 23, 0.7);
-    box-shadow: none;
-  }
-  .purchase-page-shell .user,
-  .purchase-page-shell .return-box,
-  .purchase-page-shell .card,
-  .purchase-page-shell .status-chip,
-  .purchase-page-shell .overflow-x-auto,
-  .purchase-page-shell table th,
-  .purchase-page-shell table td {
-    border-color: rgba(255, 255, 255, 0.12);
-  }
-  .purchase-page-shell .user,
-  .purchase-page-shell .card,
-  .purchase-page-shell .status-chip {
-    background: rgba(2, 6, 23, 0.4);
-  }
-  .purchase-page-shell .return-box {
-    background: rgba(15, 23, 42, 0.5);
-  }
-  .purchase-page-shell .user .meta,
-  .purchase-page-shell .meta-list div,
-  .purchase-page-shell .empty,
-  .purchase-page-shell .status-chip .label {
-    color: #94a3b8;
-  }
-  .purchase-page-shell .section-title,
-  .purchase-page-shell .card h3,
-  .purchase-page-shell .card .price,
-  .purchase-page-shell .user strong,
-  .purchase-page-shell .card .desc {
-    color: #e5e7eb;
-  }
-  .purchase-page-shell .card .desc {
-    color: #94a3b8;
-  }
-  .purchase-page-shell .card .price {
-    color: #facc15;
-  }
-  .purchase-page-shell .mono {
-    color: #e2e8f0;
-  }
-  .purchase-page-shell table th,
-  .purchase-page-shell table td {
-    color: #d1d5db;
-    border-bottom-color: rgba(255, 255, 255, 0.12);
-  }
-  .purchase-page-shell table tbody tr:hover td {
-    background: rgba(255, 255, 255, 0.03);
-  }
-  .purchase-page-shell select,
-  .purchase-page-shell input {
-    border-color: rgba(255, 255, 255, 0.15);
-    color: #e5e7eb;
-    background: rgba(15, 23, 42, 0.8);
-  }
-}
 `;
 
 function injectPurchasePageFallbackStyles(){
@@ -268,7 +208,7 @@ function injectPurchasePageFallbackStyles(){
   document.head.appendChild(style);
 }
 
-const N={class:"console-page purchase-page-layout"},z={class:"console-title-panel"},I={class:"console-kicker"},L={class:"console-section-title"},M={class:"console-section-description"},O={class:"card flex-1 min-h-0 overflow-hidden purchase-page-shell"},W={key:0,class:"flex h-full items-center justify-center py-12"},$={key:1,class:"flex h-full items-center justify-center p-10 text-center"},F={class:"max-w-md"},G={class:"mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-dark-700"},J={class:"text-lg font-semibold text-gray-900 dark:text-white"},Q={class:"mt-2 text-sm text-gray-500 dark:text-dark-400"},q=["innerHTML"];
+const N={class:"console-page purchase-page-layout"},z={class:"console-title-panel"},I={class:"console-kicker"},L={class:"console-section-title"},M={class:"console-section-description"},O={class:"card flex-1 min-h-0 overflow-hidden purchase-page-shell"},W={key:0,class:"flex h-full items-center justify-center py-12"},$={key:1,class:"flex h-full items-center justify-center p-10 text-center"},F={class:"max-w-md"},G={class:"mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100"},J={class:"text-lg font-semibold text-gray-900"},Q={class:"mt-2 text-sm text-gray-500"},q=["innerHTML"];
 
 const DEFAULT_ORDER_FILTERS={tradeStatus:"paid",fulfillmentStatus:"all",keyword:""};
 const DEFAULT_PAGE_SIZE=20;
@@ -336,41 +276,41 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
   }
 
   function paymentBadge(order){
-    return `<span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${order.tradeStatus==="paid"?"bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300":order.tradeStatus==="failed"||order.tradeStatus==="closed"||order.tradeStatus==="refunded"?"bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300":"bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"}">${escapeHtml(order.tradeStatusLabel||order.tradeStatus||"未知")}</span>`;
+    return `<span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${order.tradeStatus==="paid"?"bg-emerald-100 text-emerald-700":order.tradeStatus==="failed"||order.tradeStatus==="closed"||order.tradeStatus==="refunded"?"bg-red-100 text-red-700":"bg-amber-100 text-amber-700"}">${escapeHtml(order.tradeStatusLabel||order.tradeStatus||"未知")}</span>`;
   }
 
   function fulfillmentBadge(order){
-    return `<span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${order.fulfillmentStatus==="fulfilled"?"bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300":order.fulfillmentStatus==="fulfillment_failed"?"bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300":"bg-slate-100 text-slate-700 dark:bg-dark-700 dark:text-dark-200"}">${escapeHtml(order.fulfillmentStatusLabel||order.fulfillmentStatus||"未知")}</span>`;
+    return `<span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${order.fulfillmentStatus==="fulfilled"?"bg-emerald-100 text-emerald-700":order.fulfillmentStatus==="fulfillment_failed"?"bg-red-100 text-red-700":"bg-slate-100 text-slate-700"}">${escapeHtml(order.fulfillmentStatusLabel||order.fulfillmentStatus||"未知")}</span>`;
   }
 
   function renderUser(user){
     return '<div class="surface-tile mb-4">'+
-      '<div class="font-medium text-slate-900 dark:text-white">'+escapeHtml(user.email||"Unknown user")+'</div>'+
-      '<div class="mt-1 text-sm text-slate-500 dark:text-slate-400">User ID: '+escapeHtml(user.id)+(user.username?' / '+escapeHtml(user.username):"")+'</div>'+
-      '<div class="mt-2 text-sm text-slate-500 dark:text-slate-400">当前订单会直接发货到这个账号</div>'+
+      '<div class="font-medium text-slate-900">'+escapeHtml(user.email||"Unknown user")+'</div>'+
+      '<div class="mt-1 text-sm text-slate-500">User ID: '+escapeHtml(user.id)+(user.username?' / '+escapeHtml(user.username):"")+'</div>'+
+      '<div class="mt-2 text-sm text-slate-500">当前订单会直接发货到这个账号</div>'+
     '</div>';
   }
 
   function renderCatalogSection(title,items,type){
     if(!items.length){
       return '<section class="card overflow-hidden mt-4">'+
-        '<div class="section-toolbar"><h3 class="text-base font-semibold text-slate-950 dark:text-white">'+escapeHtml(title)+'</h3></div>'+
-        '<div class="p-4"><div class="surface-tile p-6 text-sm text-slate-500 dark:text-slate-400">'+
+        '<div class="section-toolbar"><h3 class="text-base font-semibold text-slate-950">'+escapeHtml(title)+'</h3></div>'+
+        '<div class="p-4"><div class="surface-tile p-6 text-sm text-slate-500">'+
           escapeHtml(title)+' 暂未配置。请先在支付服务的 catalog.json 里填写价格并启用 SKU。'+
         '</div></div>'+
       '</section>';
     }
     return '<section class="card overflow-hidden mt-4">'+
-      '<div class="section-toolbar"><h3 class="text-base font-semibold text-slate-950 dark:text-white">'+escapeHtml(title)+'</h3></div>'+
+      '<div class="section-toolbar"><h3 class="text-base font-semibold text-slate-950">'+escapeHtml(title)+'</h3></div>'+
       '<div class="p-4"><div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">'+items.map((item)=>{
         const extra=type==="subscription"
-          ? '<div class="mt-2 text-sm text-slate-500 dark:text-slate-400">Group ID：'+escapeHtml(item.groupId)+' · 有效期 '+escapeHtml(item.validityDays)+' 天</div>'
-          : '<div class="mt-2 text-sm text-slate-500 dark:text-slate-400">到账余额：'+escapeHtml(item.balanceAmount)+'</div>';
+          ? '<div class="mt-2 text-sm text-slate-500">Group ID：'+escapeHtml(item.groupId)+' · 有效期 '+escapeHtml(item.validityDays)+' 天</div>'
+          : '<div class="mt-2 text-sm text-slate-500">到账余额：'+escapeHtml(item.balanceAmount)+'</div>';
         return '<article class="surface-tile card-hover">'+
-          '<div class="space-y-1"><h3 class="font-semibold text-slate-950 dark:text-white">'+escapeHtml(item.title)+'</h3>'+
-          '<div class="text-sm text-slate-500 dark:text-slate-400">'+escapeHtml(item.description||"")+'</div></div>'+
+          '<div class="space-y-1"><h3 class="font-semibold text-slate-950">'+escapeHtml(item.title)+'</h3>'+
+          '<div class="text-sm text-slate-500">'+escapeHtml(item.description||"")+'</div></div>'+
           '<div class="mt-4 flex items-end justify-between gap-3"><div>'+
-            '<div class="text-2xl font-semibold text-slate-950 dark:text-white">'+formatCny(item.amountCents)+'</div>'+
+            '<div class="text-2xl font-semibold text-slate-950">'+formatCny(item.amountCents)+'</div>'+
           '</div>'+
           '<button class="btn btn-primary btn-sm" data-sku="'+escapeHtml(item.code)+'">立即支付</button>'+
           '</div>'+extra+
@@ -397,15 +337,15 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
     return '<section class="card overflow-hidden mb-4">'+
       '<div class="section-toolbar flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">'+
         '<div>'+
-          '<h3 class="text-base font-semibold text-slate-950 dark:text-white">订单筛选</h3>'+
-          '<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">支付状态和发放状态可直接切换，关键字修改后请点“查询”。</p>'+
+          '<h3 class="text-base font-semibold text-slate-950">订单筛选</h3>'+
+          '<p class="mt-1 text-sm text-slate-500">支付状态和发放状态可直接切换，关键字修改后请点“查询”。</p>'+
         '</div>'+
-        '<div class="text-sm text-slate-500 dark:text-slate-400">本页 '+escapeHtml(orderCount.value)+' 条，共 '+escapeHtml(orderTotal.value)+' 条</div>'+
+        '<div class="text-sm text-slate-500">本页 '+escapeHtml(orderCount.value)+' 条，共 '+escapeHtml(orderTotal.value)+' 条</div>'+
       '</div>'+
       '<div class="flex flex-wrap items-center gap-3 p-4">'+
-        '<select data-order-filter="tradeStatus" class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 dark:border-white/10 dark:bg-dark-800 dark:text-white">'+tradeOptions.map(([value,label])=>'<option value="'+value+'"'+(orderFilters.value.tradeStatus===value?' selected':'')+'>'+label+'</option>').join("")+'</select>'+
-        '<select data-order-filter="fulfillmentStatus" class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 dark:border-white/10 dark:bg-dark-800 dark:text-white">'+fulfillmentOptions.map(([value,label])=>'<option value="'+value+'"'+(orderFilters.value.fulfillmentStatus===value?' selected':'')+'>'+label+'</option>').join("")+'</select>'+
-        '<input data-order-filter="keyword" class="min-w-[220px] rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/10 dark:bg-dark-800 dark:text-white" placeholder="'+escapeHtml(isAdmin?"搜索订单号 / SKU / 邮箱 / 用户名":"搜索订单号 / SKU")+'" value="'+escapeHtml(orderFilters.value.keyword)+'" />'+
+        '<select data-order-filter="tradeStatus" class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">'+tradeOptions.map(([value,label])=>'<option value="'+value+'"'+(orderFilters.value.tradeStatus===value?' selected':'')+'>'+label+'</option>').join("")+'</select>'+
+        '<select data-order-filter="fulfillmentStatus" class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">'+fulfillmentOptions.map(([value,label])=>'<option value="'+value+'"'+(orderFilters.value.fulfillmentStatus===value?' selected':'')+'>'+label+'</option>').join("")+'</select>'+
+        '<input data-order-filter="keyword" class="min-w-[220px] rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none" placeholder="'+escapeHtml(isAdmin?"搜索订单号 / SKU / 邮箱 / 用户名":"搜索订单号 / SKU")+'" value="'+escapeHtml(orderFilters.value.keyword)+'" />'+
         '<button class="btn secondary btn-sm" data-apply-orders="1">查询</button>'+
         '<button class="btn secondary btn-sm" data-reset-orders="1">重置</button>'+
       '</div>'+
@@ -417,7 +357,7 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
       return "";
     }
     return '<div class="section-toolbar flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">'+
-      '<div class="text-sm text-slate-500 dark:text-slate-400">第 '+escapeHtml(orderPage.value)+' / '+escapeHtml(orderTotalPages.value)+' 页</div>'+
+      '<div class="text-sm text-slate-500">第 '+escapeHtml(orderPage.value)+' / '+escapeHtml(orderTotalPages.value)+' 页</div>'+
       '<div class="flex items-center gap-2">'+
         '<button class="btn secondary btn-sm" data-page-action="prev"'+(orderPage.value<=1?' disabled':'')+'>上一页</button>'+
         '<button class="btn secondary btn-sm" data-page-action="next"'+(orderPage.value>=orderTotalPages.value?' disabled':'')+'>下一页</button>'+
@@ -427,10 +367,10 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
 
   function renderAdminRowActions(order){
     if(order.tradeStatus==="paid"){
-      return '<span class="text-xs text-gray-400 dark:text-dark-500">已支付</span>';
+      return '<span class="text-xs text-gray-400">已支付</span>';
     }
     if(order.tradeStatus==="closed"||order.tradeStatus==="refunded"){
-      return '<span class="text-xs text-gray-400 dark:text-dark-500">不可修改</span>';
+      return '<span class="text-xs text-gray-400">不可修改</span>';
     }
     return '<div class="flex flex-wrap gap-2">'+
       '<button class="btn secondary btn-sm" data-admin-status="paid" data-order-id="'+escapeHtml(order.merchantOrderId)+'">标记已支付</button>'+
@@ -440,11 +380,11 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
 
   function renderOrderRows(orders,isAdmin){
     if(!orders.length){
-      return '<div class="p-4"><div class="surface-tile p-4 text-sm text-slate-500 dark:text-slate-400">当前筛选条件下没有订单。</div></div>';
+      return '<div class="p-4"><div class="surface-tile p-4 text-sm text-slate-500">当前筛选条件下没有订单。</div></div>';
     }
     return '<div class="overflow-x-auto">'+
-      '<table class="min-w-[1180px] divide-y divide-slate-100 dark:divide-white/10">'+
-      '<thead class="bg-slate-50 dark:bg-white/[0.04]"><tr class="text-left text-xs font-semibold text-slate-500 dark:text-slate-400">'+
+      '<table class="min-w-[1180px] divide-y divide-slate-100">'+
+      '<thead class="bg-slate-50"><tr class="text-left text-xs font-semibold text-slate-500">'+
       (isAdmin?'<th class="px-4 py-3">用户账号</th>':'')+
       '<th class="w-[180px] px-4 py-3">订单号</th>'+
       '<th class="px-4 py-3">类型</th>'+
@@ -455,19 +395,19 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
       '<th class="px-4 py-3">创建时间</th>'+
       '<th class="px-4 py-3">操作</th>'+
       '</tr></thead>'+
-      '<tbody class="divide-y divide-gray-200 dark:divide-white/10">'+orders.map((order)=>{
+      '<tbody class="divide-y divide-gray-200">'+orders.map((order)=>{
         const actionButton=isAdmin
           ? renderAdminRowActions(order)
           : '<button class="btn secondary btn-sm" data-check-order="'+escapeHtml(order.merchantOrderId)+'">刷新状态</button>';
-        return '<tr class="text-sm text-slate-700 dark:text-slate-200">'+
-          (isAdmin?'<td class="px-4 py-4"><div class="font-medium">'+escapeHtml(order.userEmail||"-")+'</div><div class="mt-1 text-xs text-gray-500 dark:text-dark-400">用户名: '+escapeHtml(order.userUsername||"-")+'</div><div class="mt-1 text-xs text-gray-500 dark:text-dark-400">UID: '+escapeHtml(order.userId||"-")+'</div></td>':'')+
+        return '<tr class="text-sm text-slate-700">'+
+          (isAdmin?'<td class="px-4 py-4"><div class="font-medium">'+escapeHtml(order.userEmail||"-")+'</div><div class="mt-1 text-xs text-gray-500">用户名: '+escapeHtml(order.userUsername||"-")+'</div><div class="mt-1 text-xs text-gray-500">UID: '+escapeHtml(order.userId||"-")+'</div></td>':'')+
           '<td class="w-[180px] px-4 py-4 font-mono text-xs break-all">'+escapeHtml(order.merchantOrderId)+'</td>'+
           '<td class="px-4 py-4">'+escapeHtml(formatOrderType(order))+'</td>'+
-          '<td class="px-4 py-4">'+escapeHtml(order.skuCode)+'<div class="mt-1 text-xs text-gray-500 dark:text-dark-400">'+formatOrderSummary(order)+'</div></td>'+
+          '<td class="px-4 py-4">'+escapeHtml(order.skuCode)+'<div class="mt-1 text-xs text-gray-500">'+formatOrderSummary(order)+'</div></td>'+
           '<td class="px-4 py-4">'+paymentBadge(order)+'</td>'+
           '<td class="px-4 py-4">'+fulfillmentBadge(order)+'</td>'+
           '<td class="px-4 py-4 font-semibold">'+escapeHtml(formatCny(order.amountCents))+'</td>'+
-          '<td class="px-4 py-4 text-xs text-slate-500 dark:text-slate-400">'+escapeHtml(formatDateTime(order.createdAt))+'</td>'+
+          '<td class="px-4 py-4 text-xs text-slate-500">'+escapeHtml(formatDateTime(order.createdAt))+'</td>'+
           '<td class="px-4 py-4">'+actionButton+'</td>'+
         '</tr>';
       }).join("")+'</tbody></table></div>';
@@ -483,15 +423,15 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
 
   function renderReturnOrder(order){
     contentHtml.value='<section class="card overflow-hidden">'+
-      '<div class="section-toolbar"><h3 class="text-base font-semibold text-slate-950 dark:text-white">支付结果确认</h3><p class="mt-1 text-sm text-slate-500 dark:text-slate-400">浏览器回跳只代表支付流程返回，最终结果以服务端状态为准。</p></div>'+
+      '<div class="section-toolbar"><h3 class="text-base font-semibold text-slate-950">支付结果确认</h3><p class="mt-1 text-sm text-slate-500">浏览器回跳只代表支付流程返回，最终结果以服务端状态为准。</p></div>'+
       '<div class="p-4">'+
         '<div class="surface-tile">'+
-          '<div class="font-medium text-slate-950 dark:text-white">订单号</div>'+
-          '<div class="mt-1 text-sm text-slate-500 dark:text-slate-400 font-mono">'+escapeHtml(order.merchantOrderId)+'</div>'+
+          '<div class="font-medium text-slate-950">订单号</div>'+
+          '<div class="mt-1 text-sm text-slate-500 font-mono">'+escapeHtml(order.merchantOrderId)+'</div>'+
           '<div class="mt-4 grid gap-3 sm:grid-cols-3" id="status-grid">'+
-            '<article class="surface-tile"><span class="text-xs text-slate-500 dark:text-slate-400">支付状态</span><div class="mt-2 font-semibold text-slate-900 dark:text-white">'+escapeHtml(order.tradeStatusLabel||order.tradeStatus||"未知")+'</div></article>'+
-            '<article class="surface-tile"><span class="text-xs text-slate-500 dark:text-slate-400">发放状态</span><div class="mt-2 font-semibold text-slate-900 dark:text-white">'+escapeHtml(order.fulfillmentStatusLabel||order.fulfillmentStatus||"未知")+'</div></article>'+
-            '<article class="surface-tile"><span class="text-xs text-slate-500 dark:text-slate-400">支付流水</span><div class="mt-2 font-semibold text-slate-900 dark:text-white">'+escapeHtml(order.platformOrderNo||"暂无")+'</div></article>'+
+            '<article class="surface-tile"><span class="text-xs text-slate-500">支付状态</span><div class="mt-2 font-semibold text-slate-900">'+escapeHtml(order.tradeStatusLabel||order.tradeStatus||"未知")+'</div></article>'+
+            '<article class="surface-tile"><span class="text-xs text-slate-500">发放状态</span><div class="mt-2 font-semibold text-slate-900">'+escapeHtml(order.fulfillmentStatusLabel||order.fulfillmentStatus||"未知")+'</div></article>'+
+            '<article class="surface-tile"><span class="text-xs text-slate-500">支付流水</span><div class="mt-2 font-semibold text-slate-900">'+escapeHtml(order.platformOrderNo||"暂无")+'</div></article>'+
           '</div>'+
         '</div>'+
       '</div>'+
