@@ -37,6 +37,15 @@
       "validity_days": 30
     },
     {
+      "code": "coding-plan-daily-1600",
+      "enabled": true,
+      "title": "Coding Plan 1600 Daily",
+      "description": "4000 RMB per month, 1600 USD daily limit.",
+      "amount_cents": 400000,
+      "group_id": 18,
+      "validity_days": 30
+    },
+    {
       "code": "claude-daily-80",
       "enabled": false,
       "title": "Claude 80 Daily",
