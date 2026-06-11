@@ -212,6 +212,9 @@ const N={class:"console-page purchase-page-layout"},z={class:"console-title-pane
 
 const DEFAULT_ORDER_FILTERS={tradeStatus:"paid",fulfillmentStatus:"all",keyword:""};
 const DEFAULT_PAGE_SIZE=20;
+const ORDER_CACHE_TTL_MS=8e3;
+const orderCache=new Map;
+const orderDateFormatter=typeof Intl<"u"&&Intl.DateTimeFormat?new Intl.DateTimeFormat("zh-CN",{dateStyle:"medium",timeStyle:"short"}):null;
 
 const te=j({__name:"PurchaseSubscriptionView",setup(){
   const{t}=D();
@@ -261,7 +264,7 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
     if(!value)return"-";
     const date=new Date(value);
     if(Number.isNaN(date.getTime()))return String(value);
-    return new Intl.DateTimeFormat("zh-CN",{dateStyle:"medium",timeStyle:"short"}).format(date);
+    return orderDateFormatter?orderDateFormatter.format(date):date.toLocaleString("zh-CN");
   }
 
   function formatOrderType(order){
@@ -494,6 +497,19 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
     return params.toString();
   }
 
+  function applyOrderPageResult(result,isAdmin){
+    const rawOrders=Array.isArray(result.orders)?result.orders:[];
+    const normalizedOrders=rawOrders.length>DEFAULT_PAGE_SIZE?rawOrders.slice(0,DEFAULT_PAGE_SIZE):rawOrders;
+    const total=Number(result.total||rawOrders.length||0);
+    const currentPage=Number(result.page||1);
+    const totalPages=Number(result.totalPages||Math.max(1,Math.ceil(total/DEFAULT_PAGE_SIZE)));
+    orderCount.value=normalizedOrders.length;
+    orderTotal.value=total;
+    orderPage.value=currentPage;
+    orderTotalPages.value=Math.max(1,Number.isFinite(totalPages)?totalPages:1);
+    renderOrderPage(normalizedOrders,isAdmin);
+  }
+
   async function loadPurchase(){
     pageTitle.value="购买套餐";
     pageSubtitle.value="通过支付宝购买订阅或余额。支付完成后，页面会自动确认订单状态并触发发货。";
@@ -518,12 +534,36 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
     pageTitle.value="订单管理";
     pageSubtitle.value=isAdmin?"查看全部订单，并按支付状态、发放状态或关键字筛选。":"查看已支付订单，并按状态或关键字筛选。";
     const endpoint=isAdmin?"/pay-api/admin/orders":"/pay-api/orders";
-    const result=await api(endpoint+"?"+buildOrderQuery());
-    orderCount.value=Array.isArray(result.orders)?result.orders.length:0;
-    orderTotal.value=Number(result.total||0);
-    orderPage.value=Number(result.page||1);
-    orderTotalPages.value=Math.max(1,Number(result.totalPages||1));
-    renderOrderPage(result.orders||[],isAdmin);
+    const query=buildOrderQuery();
+    const cacheKey=`${endpoint}?${query}`;
+    const cached=orderCache.get(cacheKey);
+    const cacheFresh=cached&&Date.now()-cached.ts<ORDER_CACHE_TTL_MS;
+    if(cacheFresh){
+      applyOrderPageResult(cached.result,isAdmin);
+    }
+    const shouldShowLoading=!cacheFresh;
+    if(shouldShowLoading){
+      loading.value=!0;
+    }
+    try{
+      const result=await api(endpoint+"?"+query);
+      const normalizedResult={
+        orders:Array.isArray(result.orders)?result.orders.slice():[],
+        total:result.total,
+        page:result.page,
+        totalPages:result.totalPages
+      };
+      orderCache.set(cacheKey,{ts:Date.now(),result:normalizedResult});
+      applyOrderPageResult(normalizedResult,isAdmin);
+    }catch(error){
+      if(!cacheFresh){
+        throw error;
+      }
+    }finally{
+      if(shouldShowLoading){
+        loading.value=!1;
+      }
+    }
   }
 
   function resetOrderFilters(){
@@ -662,7 +702,7 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
     }finally{
       loading.value=!1;
     }
-    await A();
+    A();
     bindDelegates();
   });
 
