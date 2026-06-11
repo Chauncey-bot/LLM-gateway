@@ -1,3 +1,0 @@
-[submodule "LLM-gateway"]
-	path = LLM-gateway
-	url = git@github.com:Chauncey-bot/LLM-gateway.git
