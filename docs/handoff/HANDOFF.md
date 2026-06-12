@@ -138,6 +138,36 @@ Static home:
 Docs site:
 
 - `/var/www/doc-zhisales`
+
+## 5. GitHub 提交与生产发布（免反复尝试）
+
+- 仓库远端：`git@github.com:Chauncey-bot/LLM-gateway.git`
+- 固定发布分支：`codex/dev`
+
+### GitHub 提交/推送（固定授权）
+
+- `ssh` 私钥（你当前可用）：`/Users/chauncey/Downloads/openclaw_github_ed25519`
+- 推送命令：
+  - `GIT_SSH_COMMAND='ssh -i /Users/chauncey/Downloads/openclaw_github_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no' git push origin codex/dev`
+
+### 生产机部署（独立页面 bundle）
+
+- 生产主机：`18.143.67.94`
+- 生产机登录常用 key：`/private/tmp/zhisales-key/sg.pem`
+- 登录命令：
+  - `ssh -i /private/tmp/zhisales-key/sg.pem -o StrictHostKeyChecking=no ubuntu@18.143.67.94`
+- 部署命令（`prod_PurchaseSubscriptionView-DDDC2WHV.js`）：
+  - `tmp=$(mktemp) && cp prod_PurchaseSubscriptionView-DDDC2WHV.js "$tmp"`
+  - `scp -i /private/tmp/zhisales-key/sg.pem -o StrictHostKeyChecking=no "$tmp" ubuntu@18.143.67.94:/tmp/PurchaseSubscriptionView-DDDC2WHV.js`
+  - `ssh -i /private/tmp/zhisales-key/sg.pem -o StrictHostKeyChecking=no ubuntu@18.143.67.94 "sudo -n cp /tmp/PurchaseSubscriptionView-DDDC2WHV.js /var/www/zhisales-site/assets/PurchaseSubscriptionView-DDDC2WHV.js && sudo -n sha1sum /var/www/zhisales-site/assets/PurchaseSubscriptionView-DDDC2WHV.js && rm /tmp/PurchaseSubscriptionView-DDDC2WHV.js"`
+
+### 发布核验
+
+- Git 推送成功后，可在本地确认 commit 已到位：
+  - `git rev-parse --short HEAD`
+  - `git log -1 --oneline`
+- 生产端文件可读性校验（按 `sha1`）：
+  - `ssh -i /private/tmp/zhisales-key/sg.pem -o StrictHostKeyChecking=no ubuntu@18.143.67.94 "sha1sum /var/www/zhisales-site/assets/PurchaseSubscriptionView-DDDC2WHV.js"`
 - domain: `https://aidoc.zhisales.com`
 
 Status:
