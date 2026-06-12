@@ -213,7 +213,10 @@ const N={class:"console-page purchase-page-layout"},z={class:"console-title-pane
 const DEFAULT_ORDER_FILTERS={tradeStatus:"paid",fulfillmentStatus:"all",keyword:""};
 const DEFAULT_PAGE_SIZE=20;
 const ORDER_CACHE_TTL_MS=8e3;
+const PURCHASE_CACHE_TTL_MS=3e4;
 const orderCache=new Map;
+let purchaseCacheState=null;
+let purchaseLoadingPromise=null;
 const orderDateFormatter=typeof Intl<"u"&&Intl.DateTimeFormat?new Intl.DateTimeFormat("zh-CN",{dateStyle:"medium",timeStyle:"short"}):null;
 
 const te=j({__name:"PurchaseSubscriptionView",setup(){
@@ -513,9 +516,36 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
   async function loadPurchase(){
     pageTitle.value="购买套餐";
     pageSubtitle.value="通过支付宝购买订阅或余额。支付完成后，页面会自动确认订单状态并触发发货。";
-    const session=await api("/pay-api/session");
-    const catalog=await api("/pay-api/catalog");
-    contentHtml.value='<div class="space-y-4">'+renderUser(session.user)+renderCatalogSection("订阅套餐",catalog.subscriptions||[],"subscription")+renderCatalogSection("余额充值",catalog.balancePacks||[],"balance")+'</div>';
+    const cacheToken=embeddedToken||sessionStorage.getItem("pay_embedded_token")||localStorage.getItem("auth_token")||"";
+    if(cacheToken&&purchaseCacheState&&purchaseCacheState.token===cacheToken&&Date.now()-purchaseCacheState.ts<PURCHASE_CACHE_TTL_MS){
+      const cachedCatalog=purchaseCacheState.catalog;
+      const cachedUser=purchaseCacheState.user;
+      contentHtml.value='<div class="space-y-4">'+renderUser(cachedUser)+renderCatalogSection("订阅套餐",cachedCatalog.subscriptions||[],"subscription")+renderCatalogSection("余额充值",cachedCatalog.balancePacks||[],"balance")+'</div>';
+      return;
+    }
+    if(purchaseLoadingPromise){
+      await purchaseLoadingPromise;
+      if(purchaseCacheState&&purchaseCacheState.token===cacheToken){
+        const cachedCatalog=purchaseCacheState.catalog;
+        const cachedUser=purchaseCacheState.user;
+        contentHtml.value='<div class="space-y-4">'+renderUser(cachedUser)+renderCatalogSection("订阅套餐",cachedCatalog.subscriptions||[],"subscription")+renderCatalogSection("余额充值",cachedCatalog.balancePacks||[],"balance")+'</div>';
+      }
+      return;
+    }
+    const doLoad=async()=>{
+      const session=await api("/pay-api/session");
+      const catalog=await api("/pay-api/catalog");
+      purchaseCacheState={ts:Date.now(),token:cacheToken,user:session.user,catalog:{subscriptions:Array.isArray(catalog.subscriptions)?catalog.subscriptions:[],balancePacks:Array.isArray(catalog.balancePacks)?catalog.balancePacks:[]}};
+      contentHtml.value='<div class="space-y-4">'+renderUser(session.user)+renderCatalogSection("订阅套餐",catalog.subscriptions||[],"subscription")+renderCatalogSection("余额充值",catalog.balancePacks||[],"balance")+'</div>';
+    };
+    purchaseLoadingPromise=doLoad();
+    try{
+      await purchaseLoadingPromise;
+    } finally {
+      if(purchaseLoadingPromise){
+        purchaseLoadingPromise=null;
+      }
+    }
   }
 
   async function loadReturn(){
