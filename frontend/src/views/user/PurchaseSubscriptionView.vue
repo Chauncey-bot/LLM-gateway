@@ -601,30 +601,29 @@ async function setAdminOrderStatus(merchantOrderId: string, tradeStatus: 'paid' 
   }
 }
 
-async function initialize() {
+async function loadPageByRoute(forceOrders = false) {
   clearErrors()
   sessionAuthToken.value = resolveToken()
   if (!sessionAuthToken.value) {
     setGlobalError('当前未检测到登录 token，请重新登录后再试。')
     return
   }
-  cache.clear()
   if (isPurchaseRoute.value === 'purchase') {
     await loadPurchase()
-  } else {
-    page.value = 1
-    await loadOrders(true)
+    return
   }
+  page.value = 1
+  await loadOrders(forceOrders)
 }
 
 watch(
   () => route.path,
   () => {
-    void initialize()
+    void loadPageByRoute()
   },
 )
 
 onMounted(() => {
-  void initialize()
+  void loadPageByRoute(true)
 })
 </script>
