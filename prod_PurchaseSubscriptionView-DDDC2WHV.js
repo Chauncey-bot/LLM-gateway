@@ -245,13 +245,71 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
     window.history.replaceState({}, "", clean.toString());
   }
 
+  const routePath=v(typeof window<"u"?window.location.pathname:"/purchase");
   const mode=_(()=>{
-    const pathname=typeof window<"u"?window.location.pathname:"/purchase";
+    const pathname=routePath.value;
     if(pathname.startsWith("/admin/orders"))return"adminOrders";
     if(pathname.startsWith("/orders"))return"orders";
     if(pathname.startsWith("/purchase/return"))return"return";
     return"purchase";
   });
+
+  const ROUTE_CHANGE_EVENT_NAME="__purchase-subscription-route-change";
+  const rawPushState=typeof window<"u"?window.history.pushState:null;
+  const rawReplaceState=typeof window<"u"?window.history.replaceState:null;
+  const refreshFromHistory=async()=>{
+    const nextPath=typeof window<"u"?window.location.pathname:"/purchase";
+    if(routePath.value===nextPath){
+      return;
+    }
+    routePath.value=nextPath;
+    pageTitle.value="";
+    pageSubtitle.value="";
+    contentHtml.value="";
+    orderPage.value=1;
+    orderTotalPages.value=1;
+    orderCount.value=0;
+    loading.value=!0;
+    try{
+      await renderCurrent();
+    }finally{
+      loading.value=!1;
+    }
+    bindDelegates();
+  };
+  const routeChangeHandler=()=>{
+    void refreshFromHistory();
+  };
+  const patchHistoryState=()=>{
+    if(typeof window==="undefined") return;
+    if(typeof rawPushState==="function"){
+      window.history.pushState=(...args)=>{
+        const result=rawPushState.apply(window.history,args);
+        window.dispatchEvent(new Event(ROUTE_CHANGE_EVENT_NAME));
+        return result;
+      };
+    }
+    if(typeof rawReplaceState==="function"){
+      window.history.replaceState=(...args)=>{
+        const result=rawReplaceState.apply(window.history,args);
+        window.dispatchEvent(new Event(ROUTE_CHANGE_EVENT_NAME));
+        return result;
+      };
+    }
+    window.addEventListener("popstate", routeChangeHandler);
+    window.addEventListener(ROUTE_CHANGE_EVENT_NAME, routeChangeHandler);
+  };
+  const unpatchHistoryState=()=>{
+    if(typeof window==="undefined") return;
+    if(typeof rawPushState==="function"){
+      window.history.pushState=rawPushState;
+    }
+    if(typeof rawReplaceState==="function"){
+      window.history.replaceState=rawReplaceState;
+    }
+    window.removeEventListener("popstate", routeChangeHandler);
+    window.removeEventListener(ROUTE_CHANGE_EVENT_NAME, routeChangeHandler);
+  };
 
   const purchaseEnabled=_(()=>((l.cachedPublicSettings==null?void 0:l.cachedPublicSettings.purchase_subscription_enabled)??!1));
 
@@ -735,9 +793,11 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
     }
     A();
     bindDelegates();
+    patchHistoryState();
   });
 
   C(()=>{
+    unpatchHistoryState();
     if(contentRef.value){
       contentRef.value.onclick=null;
       contentRef.value.onchange=null;
