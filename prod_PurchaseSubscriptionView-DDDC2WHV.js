@@ -212,7 +212,7 @@ const N={class:"console-page purchase-page-layout"},z={class:"console-title-pane
 
 const DEFAULT_ORDER_FILTERS={tradeStatus:"paid",fulfillmentStatus:"all",keyword:""};
 const DEFAULT_PAGE_SIZE=20;
-const ORDER_CACHE_TTL_MS=8e3;
+const ORDER_CACHE_TTL_MS=3e4;
 const PURCHASE_CACHE_TTL_MS=3e4;
 const orderCache=new Map;
 let purchaseCacheState=null;
@@ -570,6 +570,7 @@ const te=j({__name:"PurchaseSubscriptionView",setup(){
     const cacheFresh=cached&&Date.now()-cached.ts<ORDER_CACHE_TTL_MS;
     if(cacheFresh){
       applyOrderPageResult(cached.result,isAdmin);
+      return;
     }
     const shouldShowLoading=!cacheFresh;
     if(shouldShowLoading){
