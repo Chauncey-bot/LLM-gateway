@@ -434,26 +434,6 @@ const SoraIcon = {
     )
 }
 
-const OrdersIcon = {
-  render: () =>
-    h(
-      'svg',
-      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
-      [
-        h('path', {
-          'stroke-linecap': 'round',
-          'stroke-linejoin': 'round',
-          d: 'M8 9h8m-8 4h5m7-10.25A2.75 2.75 0 0119.75 5.75v12.5A2.75 2.75 0 0117 21H5a2.75 2.75 0 01-2.75-2.75V5.75A2.75 2.75 0 015 3h10.25L18.5 6.75z'
-        }),
-        h('path', {
-          'stroke-linecap': 'round',
-          'stroke-linejoin': 'round',
-          d: 'M6.5 9h1m0 4h1m0 4h1m2.5-8h1m0 4h1m0 4h1'
-        })
-      ]
-    )
-}
-
 const ChevronDoubleRightIcon = {
   render: () =>
     h(
@@ -476,7 +456,7 @@ const userNavItems = computed((): NavItem[] => {
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
-    { path: '/orders', label: t('nav.orders'), icon: OrdersIcon, hideInSimpleMode: true },
+    { path: '/orders', label: t('nav.orders'), icon: RechargeSubscriptionIcon },
     ...(appStore.cachedPublicSettings?.sora_client_enabled
       ? [{ path: '/sora', label: t('nav.sora'), icon: SoraIcon }]
       : []),
@@ -510,7 +490,7 @@ const personalNavItems = computed((): NavItem[] => {
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
-    { path: '/orders', label: t('nav.orders'), icon: OrdersIcon, hideInSimpleMode: true },
+    { path: '/orders', label: t('nav.orders'), icon: RechargeSubscriptionIcon },
     ...(appStore.cachedPublicSettings?.sora_client_enabled
       ? [{ path: '/sora', label: t('nav.sora'), icon: SoraIcon }]
       : []),
@@ -571,7 +551,7 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, hideInSimpleMode: true },
     { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon, hideInSimpleMode: true },
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
-    { path: '/admin/orders', label: t('nav.orders'), icon: OrdersIcon, hideInSimpleMode: true },
+    { path: '/admin/orders', label: t('nav.orders'), icon: RechargeSubscriptionIcon },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },

@@ -226,9 +226,21 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/purchase/return',
+    name: 'PurchaseReturn',
+    component: () => import('@/views/user/PurchaseReturnView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Purchase Return',
+      titleKey: 'orders.returnTitle',
+      descriptionKey: 'orders.returnDescription'
+    }
+  },
+  {
     path: '/orders',
     name: 'UserOrders',
-    component: () => import('@/views/user/PurchaseSubscriptionView.vue'),
+    component: () => import('@/views/user/OrdersView.vue'),
     meta: {
       requiresAuth: true,
       requiresAdmin: false,
@@ -329,13 +341,13 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/admin/orders',
     name: 'AdminOrders',
-    component: () => import('@/views/user/PurchaseSubscriptionView.vue'),
+    component: () => import('@/views/admin/OrdersView.vue'),
     meta: {
       requiresAuth: true,
       requiresAdmin: true,
       title: 'Order Management',
       titleKey: 'orders.title',
-      descriptionKey: 'orders.description'
+      descriptionKey: 'orders.adminDescription'
     }
   },
   {
