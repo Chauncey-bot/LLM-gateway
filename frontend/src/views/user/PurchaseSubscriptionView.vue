@@ -325,6 +325,13 @@ interface OrdersResponse {
 const PAGE_SIZE = 20
 const TTL_MS = 30000
 
+interface PurchaseCacheState {
+  fetchedAt: number
+  token: string
+  catalog: CatalogData
+  user: PurchaseSession
+}
+
 const isPurchaseRoute = computed<PurchaseRouteMode>(() =>
   route.path === '/purchase' ? 'purchase' : 'orders',
 )
@@ -363,6 +370,8 @@ const sessionAuthToken = ref('')
 const busyCreate = ref('')
 const busyOrderStatus = ref('')
 const cache = new Map<string, { fetchedAt: number; data: OrdersResponse }>()
+const purchaseCache = ref<PurchaseCacheState | null>(null)
+let purchaseLoadingPromise: Promise<void> | null = null
 
 function formatCny(amountCents: number): string {
   return `¥${(Number(amountCents || 0) / 100).toFixed(2)}`
@@ -467,18 +476,50 @@ function clearErrors() {
 
 async function loadPurchase() {
   clearErrors()
-  try {
+  const token = resolveToken()
+  if (!token) {
+    setGlobalError('当前未检测到登录 token，请重新登录后再试。')
+    return
+  }
+  const now = Date.now()
+  const cached = purchaseCache.value
+  if (cached && cached.token === token && now - cached.fetchedAt < TTL_MS) {
+    session.user = cached.user
+    catalog.value = cached.catalog
+    return
+  }
+  if (purchaseLoadingPromise) {
+    await purchaseLoadingPromise
+    return
+  }
+  const tokenMatched = token
+  const doLoad = async () => {
     const [sess, cat] = await Promise.all([
       requestJson<{ user: PurchaseSession; querySupported: boolean }>('/pay-api/session'),
       requestJson<CatalogData>('/pay-api/catalog'),
     ])
-    session.user = sess.user
-    catalog.value = {
-      subscriptions: cat.subscriptions || [],
-      balancePacks: cat.balancePacks || [],
+    const nextCatalog: CatalogData = {
+      subscriptions: Array.isArray(cat.subscriptions) ? cat.subscriptions : [],
+      balancePacks: Array.isArray(cat.balancePacks) ? cat.balancePacks : [],
     }
+    session.user = sess.user
+    catalog.value = nextCatalog
+    purchaseCache.value = {
+      fetchedAt: Date.now(),
+      token: tokenMatched,
+      user: sess.user,
+      catalog: nextCatalog,
+    }
+  }
+  purchaseLoadingPromise = doLoad()
+  try {
+    await purchaseLoadingPromise
   } catch (error) {
     setGlobalError(error instanceof Error ? error.message : '加载购买页面失败')
+  } finally {
+    if (purchaseLoadingPromise) {
+      purchaseLoadingPromise = null
+    }
   }
 }
 
