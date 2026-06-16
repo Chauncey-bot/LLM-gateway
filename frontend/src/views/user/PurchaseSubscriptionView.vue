@@ -1,670 +1,403 @@
 <template>
-  <div class="min-h-screen bg-[#f6f7fb] px-4 py-6">
-    <div class="mx-auto w-full max-w-6xl space-y-4">
-      <section class="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-        <p class="text-xs font-semibold uppercase tracking-wider text-primary-600">
-          {{ pageLabel }}
-        </p>
-        <h1 class="mt-2 text-2xl font-bold text-gray-900">
-          {{ pageTitle }}
-        </h1>
-        <p class="mt-2 max-w-3xl text-sm leading-relaxed text-gray-500">
-          {{ pageDescription }}
-        </p>
-      </section>
+  <AppLayout>
+    <div class="console-page mx-auto max-w-7xl space-y-5">
+      <div class="console-title-panel">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p class="console-kicker">{{ t('nav.myAccount') }}</p>
+            <h1 class="console-section-title">{{ t('purchase.title') }}</h1>
+            <p class="console-section-description">{{ t('purchase.description') }}</p>
+          </div>
 
-      <div
-        v-if="globalError"
-        class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
-      >
-        {{ globalError }}
+          <a
+            v-if="hasLegacyPurchaseUrl"
+            :href="legacyPurchaseUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn-secondary btn-sm"
+          >
+            <Icon name="externalLink" size="sm" class="mr-1.5" :stroke-width="2" />
+            {{ t('purchase.openLegacyPage') }}
+          </a>
+        </div>
       </div>
 
-      <section v-if="isPurchaseRoute" class="space-y-4">
-        <section class="rounded-2xl border border-gray-200 bg-white p-5">
-          <h2 class="text-lg font-semibold text-gray-900">已登录用户信息</h2>
-          <p class="mt-2 text-sm text-gray-500">
-            {{ session.user ? session.user.email : '请先确认登录状态' }}
-          </p>
-        </section>
+      <div
+        v-if="querySupported === false"
+        class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-200"
+      >
+        {{ t('purchase.queryUnavailable') }}
+      </div>
 
-        <section class="rounded-2xl border border-gray-200 bg-white p-5">
-          <h2 class="text-lg font-semibold text-gray-900">订阅套餐</h2>
-          <p class="mt-1 text-sm text-gray-500">先选套餐，再点击支付。</p>
-          <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            <article
-              v-for="sku in subscriptions"
-              :key="sku.code"
-              class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
-            >
-              <div class="text-sm font-semibold text-gray-900">{{ sku.title }}</div>
-              <div class="mt-2 text-xs text-gray-500">{{ sku.description }}</div>
-              <div class="mt-4 flex items-end justify-between">
-                <div>
-                  <p class="text-xl font-bold text-gray-900">{{ formatCny(sku.amountCents) }}</p>
-                  <p class="text-xs text-gray-500">
-                    有效期 {{ sku.validityDays }} 天 · Group {{ sku.groupId }}
-                  </p>
+      <div v-if="loading" class="flex justify-center py-12">
+        <div
+          class="h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"
+        ></div>
+      </div>
+
+      <div v-else-if="!purchaseEnabled" class="card p-6">
+        <EmptyState :title="t('purchase.notEnabledTitle')" :description="t('purchase.notEnabledDesc')">
+          <template #icon>
+            <Icon name="creditCard" size="xl" class="text-slate-400" />
+          </template>
+        </EmptyState>
+      </div>
+
+      <div v-else-if="loadError" class="card p-6">
+        <EmptyState
+          :title="t('purchase.loadFailedTitle')"
+          :description="loadError"
+          :action-text="t('purchase.retry')"
+          @action="loadPage"
+        >
+          <template #icon>
+            <Icon name="exclamationTriangle" size="xl" class="text-rose-500" />
+          </template>
+        </EmptyState>
+      </div>
+
+      <template v-else>
+        <div class="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium text-gray-500 dark:text-dark-400">
+                {{ t('purchase.currentAccount') }}
+              </p>
+              <p class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
+                {{ session?.user.email || authStore.user?.email || '-' }}
+              </p>
+              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">
+                {{ t('purchase.currentAccountHint') }}
+              </p>
+            </div>
+
+            <div class="flex flex-wrap gap-3 text-sm">
+              <div class="rounded-2xl border border-gray-200 bg-slate-50 px-4 py-3 dark:border-white/10 dark:bg-slate-900/60">
+                <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-dark-400">
+                  {{ t('purchase.userId') }}
                 </div>
-                <button
-                  class="rounded-lg bg-primary-500 px-3 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-                  :disabled="busyCreate === sku.code"
-                  @click="createOrder(sku.code)"
-                >
-                  {{ busyCreate === sku.code ? '提交中...' : '立即支付' }}
-                </button>
-              </div>
-            </article>
-          </div>
-          <p v-if="!subscriptions.length" class="mt-4 text-sm text-gray-500">
-            当前未配置订阅套餐。
-          </p>
-        </section>
-
-        <section class="rounded-2xl border border-gray-200 bg-white p-5">
-          <h2 class="text-lg font-semibold text-gray-900">余额充值</h2>
-          <p class="mt-1 text-sm text-gray-500">选择余额档位后支付后自动到账。</p>
-          <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            <article
-              v-for="sku in balancePacks"
-              :key="sku.code"
-              class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
-            >
-              <div class="text-sm font-semibold text-gray-900">{{ sku.title }}</div>
-              <div class="mt-2 text-xs text-gray-500">{{ sku.description }}</div>
-              <div class="mt-4 flex items-end justify-between">
-                <div>
-                  <p class="text-xl font-bold text-gray-900">{{ formatCny(sku.amountCents) }}</p>
-                  <p class="text-xs text-gray-500">到账 {{ sku.balanceAmount }} 元</p>
+                <div class="mt-1 font-medium text-slate-900 dark:text-white">
+                  #{{ session?.user.id || authStore.user?.id || '-' }}
                 </div>
-                <button
-                  class="rounded-lg bg-primary-500 px-3 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-                  :disabled="busyCreate === sku.code"
-                  @click="createOrder(sku.code)"
-                >
-                  {{ busyCreate === sku.code ? '提交中...' : '立即支付' }}
-                </button>
               </div>
-            </article>
-          </div>
-          <p v-if="!balancePacks.length" class="mt-4 text-sm text-gray-500">
-            当前未配置余额充值档位。
-          </p>
-        </section>
-      </section>
 
-      <section v-else class="space-y-4">
-        <section class="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5">
-          <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <h2 class="text-lg font-semibold text-gray-900">
-              订单筛选
-            </h2>
-            <p class="text-xs text-gray-500">
-              共 {{ total }} 条，当前 {{ page }} / {{ totalPages }} 页
-            </p>
+              <div class="rounded-2xl border border-gray-200 bg-slate-50 px-4 py-3 dark:border-white/10 dark:bg-slate-900/60">
+                <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-dark-400">
+                  {{ t('purchase.queryStatus') }}
+                </div>
+                <div class="mt-1 font-medium text-slate-900 dark:text-white">
+                  {{
+                    querySupported === false
+                      ? t('purchase.queryStatusDisabled')
+                      : t('purchase.queryStatusEnabled')
+                  }}
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="mt-4 grid gap-3 md:flex md:flex-wrap md:items-center">
-            <select
-              v-model="filters.tradeStatus"
-              class="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700"
-              @change="resetPageAndLoad"
-            >
-              <option value="all">支付状态：全部</option>
-              <option value="paid">已支付</option>
-              <option value="pending">待支付</option>
-              <option value="closed">已关闭</option>
-              <option value="failed">支付失败</option>
-              <option value="refunded">已退款</option>
-            </select>
-            <select
-              v-model="filters.fulfillmentStatus"
-              class="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700"
-              @change="resetPageAndLoad"
-            >
-              <option value="all">发放状态：全部</option>
-              <option value="pending">待发放</option>
-              <option value="fulfilled">已发放</option>
-              <option value="fulfillment_failed">发放失败</option>
-            </select>
-            <input
-              v-model.trim="filters.keyword"
-              type="text"
-              class="h-10 flex-1 min-w-[220px] rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700"
-              :placeholder="isAdminMode ? '关键词：订单号 / SKU / 邮箱 / 用户名' : '关键词：订单号 / SKU'"
-              @keydown.enter.prevent="applyOrderFilters"
-            />
-            <button
-              class="h-10 rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              :disabled="ordersLoading"
-              @click="applyOrderFilters"
-            >
-              查询
-            </button>
-            <button
-              class="h-10 rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              :disabled="ordersLoading"
-              @click="resetFilters"
-            >
-              重置
-            </button>
-          </div>
-        </section>
-
-        <section class="rounded-2xl border border-gray-200 bg-white">
-          <div v-if="ordersLoading" class="py-12 text-center text-sm text-gray-500">
-            加载订单中...
-          </div>
-          <div v-else-if="ordersError" class="px-5 py-4 text-sm text-red-600">
-            {{ ordersError }}
-          </div>
-          <div v-else-if="orders.length === 0" class="px-5 py-4 text-sm text-gray-500">
-            暂无订单。
-          </div>
-          <div v-else class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200">
-              <thead class="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                <tr>
-                  <th v-if="isAdminMode" class="px-4 py-3">用户账号</th>
-                  <th class="px-4 py-3">订单号</th>
-                  <th class="px-4 py-3">类型</th>
-                  <th class="px-4 py-3">SKU</th>
-                  <th class="px-4 py-3">支付状态</th>
-                  <th class="px-4 py-3">发放状态</th>
-                  <th class="px-4 py-3">金额</th>
-                  <th class="px-4 py-3">创建时间</th>
-                  <th class="px-4 py-3">操作</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-gray-100 text-sm text-gray-700">
-                <tr v-for="order in orders" :key="order.merchantOrderId" class="hover:bg-gray-50">
-                  <td v-if="isAdminMode" class="px-4 py-3">
-                    <p class="font-medium">{{ order.userEmail || '-' }}</p>
-                    <p class="text-xs text-gray-500">用户名：{{ order.userUsername || '-' }}</p>
-                    <p class="text-xs text-gray-500">UID：{{ order.userId }}</p>
-                  </td>
-                  <td class="px-4 py-3 font-mono text-xs text-gray-700">{{ order.merchantOrderId }}</td>
-                  <td class="px-4 py-3 text-gray-700">
-                    {{ order.skuType === 'subscription' ? '订阅' : '余额' }}
-                  </td>
-                  <td class="px-4 py-3 text-gray-700">
-                    <p>{{ order.skuCode }}</p>
-                    <p class="text-xs text-gray-500">
-                      {{ formatOrderSummary(order) }}
-                    </p>
-                  </td>
-                  <td class="px-4 py-3">
-                    <span :class="statusBadgeClass(order.tradeStatus)" class="inline-flex rounded-full px-2.5 py-1 text-xs">
-                      {{ order.tradeStatusLabel || order.tradeStatus }}
-                    </span>
-                  </td>
-                  <td class="px-4 py-3">
-                    <span
-                      :class="statusBadgeClass(order.fulfillmentStatus)"
-                      class="inline-flex rounded-full px-2.5 py-1 text-xs"
-                    >
-                      {{ order.fulfillmentStatusLabel || order.fulfillmentStatus }}
-                    </span>
-                  </td>
-                  <td class="px-4 py-3 font-semibold text-gray-900">
-                    {{ formatCny(order.amountCents) }}
-                  </td>
-                  <td class="px-4 py-3 text-xs text-gray-500">
-                    {{ formatDateTime(order.createdAt) }}
-                  </td>
-                  <td class="px-4 py-3">
-                    <div v-if="isAdminMode" class="flex gap-2">
-                      <button
-                        class="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-600 disabled:opacity-50"
-                        :disabled="busyOrderStatus === order.merchantOrderId"
-                        @click="setAdminOrderStatus(order.merchantOrderId, 'paid')"
-                      >
-                        标记已支付
-                      </button>
-                      <button
-                        class="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-600 disabled:opacity-50"
-                        :disabled="busyOrderStatus === order.merchantOrderId"
-                        @click="setAdminOrderStatus(order.merchantOrderId, 'closed')"
-                      >
-                        标记关闭
-                      </button>
-                    </div>
-                    <div v-else>
-                      <button
-                        class="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-600 disabled:opacity-50"
-                        :disabled="busyOrderStatus === order.merchantOrderId"
-                        @click="checkOrder(order.merchantOrderId)"
-                      >
-                        刷新状态
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <div class="flex items-center justify-end gap-2">
-          <button
-            class="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 disabled:opacity-50"
-            :disabled="page <= 1 || ordersLoading"
-            @click="changePage(page - 1)"
-          >
-            上一页
-          </button>
-          <button
-            class="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 disabled:opacity-50"
-            :disabled="page >= totalPages || ordersLoading"
-            @click="changePage(page + 1)"
-          >
-            下一页
-          </button>
         </div>
-      </section>
+
+        <div v-if="catalogEmpty" class="card p-6">
+          <EmptyState :title="t('purchase.emptyCatalogTitle')" :description="t('purchase.emptyCatalogDesc')">
+            <template #icon>
+              <Icon name="inbox" size="xl" class="text-slate-400" />
+            </template>
+          </EmptyState>
+        </div>
+
+        <template v-else>
+          <section class="space-y-4">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
+                  {{ t('purchase.subscriptionPlans') }}
+                </h2>
+                <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">
+                  {{ t('purchase.subscriptionPlansDesc') }}
+                </p>
+              </div>
+            </div>
+
+            <div
+              v-if="catalog.subscriptions.length > 0"
+              class="grid gap-5 md:grid-cols-2 xl:grid-cols-3"
+            >
+              <article
+                v-for="item in catalog.subscriptions"
+                :key="item.code"
+                class="card card-hover flex h-full flex-col overflow-hidden"
+              >
+                <div class="section-toolbar flex items-start justify-between">
+                  <div class="flex items-start gap-3">
+                    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-100 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-300">
+                      <Icon name="creditCard" size="md" />
+                    </div>
+                    <div>
+                      <h3 class="font-semibold text-slate-900 dark:text-white">{{ item.title }}</h3>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ item.code }}</p>
+                    </div>
+                  </div>
+                  <span class="badge badge-primary text-xs">
+                    {{ t('orders.types.subscription') }}
+                  </span>
+                </div>
+
+                <div class="flex flex-1 flex-col gap-4 p-4">
+                  <p class="min-h-[48px] text-sm leading-6 text-gray-600 dark:text-dark-300">
+                    {{ item.description || t('purchase.noDescription') }}
+                  </p>
+
+                  <div class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+                    {{ formatAmount(item.amountCents) }}
+                  </div>
+
+                  <div class="grid gap-3 text-sm text-gray-500 dark:text-dark-400 sm:grid-cols-2">
+                    <div class="rounded-2xl bg-slate-50 px-3 py-2 dark:bg-white/5">
+                      <div class="text-xs uppercase tracking-wide">{{ t('purchase.groupId') }}</div>
+                      <div class="mt-1 font-medium text-slate-900 dark:text-white">
+                        {{ item.groupId ?? '-' }}
+                      </div>
+                    </div>
+                    <div class="rounded-2xl bg-slate-50 px-3 py-2 dark:bg-white/5">
+                      <div class="text-xs uppercase tracking-wide">{{ t('purchase.validityDays') }}</div>
+                      <div class="mt-1 font-medium text-slate-900 dark:text-white">
+                        {{ item.validityDays ?? '-' }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    class="btn btn-primary mt-auto"
+                    :disabled="submittingSkuCode === item.code"
+                    @click="submitOrder(item.code)"
+                  >
+                    {{ submittingSkuCode === item.code ? t('purchase.creatingOrder') : t('purchase.buyNow') }}
+                  </button>
+                </div>
+              </article>
+            </div>
+
+            <div v-else class="rounded-2xl border border-dashed border-gray-200 px-4 py-6 text-sm text-gray-500 dark:border-white/10 dark:text-dark-400">
+              {{ t('purchase.emptySubscriptions') }}
+            </div>
+          </section>
+
+          <section class="space-y-4">
+            <div>
+              <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
+                {{ t('purchase.balancePacks') }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">
+                {{ t('purchase.balancePacksDesc') }}
+              </p>
+            </div>
+
+            <div
+              v-if="catalog.balancePacks.length > 0"
+              class="grid gap-5 md:grid-cols-2 xl:grid-cols-3"
+            >
+              <article
+                v-for="item in catalog.balancePacks"
+                :key="item.code"
+                class="card card-hover flex h-full flex-col overflow-hidden"
+              >
+                <div class="section-toolbar flex items-start justify-between">
+                  <div class="flex items-start gap-3">
+                    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                      <Icon name="dollar" size="md" />
+                    </div>
+                    <div>
+                      <h3 class="font-semibold text-slate-900 dark:text-white">{{ item.title }}</h3>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ item.code }}</p>
+                    </div>
+                  </div>
+                  <span class="badge badge-success text-xs">
+                    {{ t('orders.types.balance') }}
+                  </span>
+                </div>
+
+                <div class="flex flex-1 flex-col gap-4 p-4">
+                  <p class="min-h-[48px] text-sm leading-6 text-gray-600 dark:text-dark-300">
+                    {{ item.description || t('purchase.noDescription') }}
+                  </p>
+
+                  <div class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+                    {{ formatAmount(item.amountCents) }}
+                  </div>
+
+                  <div class="rounded-2xl bg-slate-50 px-3 py-3 text-sm text-gray-500 dark:bg-white/5 dark:text-dark-400">
+                    <div class="text-xs uppercase tracking-wide">{{ t('purchase.balanceAmount') }}</div>
+                    <div class="mt-1 font-medium text-slate-900 dark:text-white">
+                      {{ item.balanceAmount ?? '-' }}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    class="btn btn-primary mt-auto"
+                    :disabled="submittingSkuCode === item.code"
+                    @click="submitOrder(item.code)"
+                  >
+                    {{ submittingSkuCode === item.code ? t('purchase.creatingOrder') : t('purchase.buyNow') }}
+                  </button>
+                </div>
+              </article>
+            </div>
+
+            <div v-else class="rounded-2xl border border-dashed border-gray-200 px-4 py-6 text-sm text-gray-500 dark:border-white/10 dark:text-dark-400">
+              {{ t('purchase.emptyBalancePacks') }}
+            </div>
+          </section>
+        </template>
+      </template>
     </div>
-  </div>
+  </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useAppStore } from '@/stores'
+import { useAuthStore } from '@/stores/auth'
+import AppLayout from '@/components/layout/AppLayout.vue'
+import Icon from '@/components/icons/Icon.vue'
+import { EmptyState } from '@/components/common'
+import {
+  isPayApiError,
+  payAPI,
+  type PaymentCatalogResponse,
+  type PaymentSessionResponse
+} from '@/api/pay'
+import { buildEmbeddedUrl, detectTheme } from '@/utils/embedded-url'
 
-const route = useRoute()
+const { t, locale } = useI18n()
+const appStore = useAppStore()
+const authStore = useAuthStore()
 
-type PurchaseRouteMode = 'purchase' | 'orders'
-type TradeStatus = 'all' | 'paid' | 'pending' | 'closed' | 'failed' | 'refunded'
-type FulfillmentStatus = 'all' | 'pending' | 'fulfilled' | 'fulfillment_failed'
-
-interface CatalogSku {
-  code: string
-  title: string
-  description: string
-  amountCents: number
-  groupId?: number
-  validityDays?: number
-  balanceAmount?: number
-}
-
-interface CatalogData {
-  subscriptions: CatalogSku[]
-  balancePacks: CatalogSku[]
-}
-
-interface PurchaseSession {
-  id: number
-  email: string
-  username: string
-}
-
-interface OrderRow {
-  merchantOrderId: string
-  userId: number
-  userEmail: string | null
-  userUsername: string | null
-  skuType: 'subscription' | 'balance'
-  skuCode: string
-  groupId: number | null
-  validityDays: number | null
-  balanceAmount: number | null
-  amountCents: number
-  platformOrderNo: string | null
-  tradeStatus: string
-  tradeStatusLabel: string
-  fulfillmentStatus: string
-  fulfillmentStatusLabel: string
-  createdAt: string
-}
-
-interface OrdersResponse {
-  orders: OrderRow[]
-  total: number
-  page: number
-  totalPages: number
-}
-
-const PAGE_SIZE = 20
-const TTL_MS = 30000
-
-interface PurchaseCacheState {
-  fetchedAt: number
-  token: string
-  catalog: CatalogData
-  user: PurchaseSession
-}
-
-const isPurchaseRoute = computed<PurchaseRouteMode>(() =>
-  route.path === '/purchase' ? 'purchase' : 'orders',
-)
-const isAdminMode = computed(() => route.path === '/admin/orders')
-
-const pageLabel = computed(() =>
-  isPurchaseRoute.value === 'purchase' ? '充值 / 订阅' : '订单管理',
-)
-const pageTitle = computed(() =>
-  isPurchaseRoute.value === 'purchase' ? '购买套餐' : '订单管理',
-)
-const pageDescription = computed(() =>
-  isPurchaseRoute.value === 'purchase'
-    ? '通过支付宝购买订阅或充值余额，支付完成后会进入订单发放流程。'
-    : '查看并筛选订单，管理员可手动调整支付状态。',
-)
-
-const globalError = ref('')
-const ordersError = ref('')
-const ordersLoading = ref(false)
-const session = reactive<PurchaseSession & { user: PurchaseSession | null }>({ id: 0, email: '', username: '', user: null })
-const catalog = ref<CatalogData>({ subscriptions: [], balancePacks: [] })
-const subscriptions = computed(() => catalog.value.subscriptions)
-const balancePacks = computed(() => catalog.value.balancePacks)
-
-const orders = ref<OrderRow[]>([])
-const total = ref(0)
-const page = ref(1)
-const totalPages = ref(1)
-const filters = reactive({
-  tradeStatus: 'all' as TradeStatus,
-  fulfillmentStatus: 'all' as FulfillmentStatus,
-  keyword: '',
+const loading = ref(true)
+const loadError = ref('')
+const session = ref<PaymentSessionResponse | null>(null)
+const catalog = ref<PaymentCatalogResponse>({
+  subscriptions: [],
+  balancePacks: []
 })
-const sessionAuthToken = ref('')
-const busyCreate = ref('')
-const busyOrderStatus = ref('')
-const cache = new Map<string, { fetchedAt: number; data: OrdersResponse }>()
-const purchaseCache = ref<PurchaseCacheState | null>(null)
-let purchaseLoadingPromise: Promise<void> | null = null
+const querySupported = ref(true)
+const submittingSkuCode = ref('')
+const purchaseTheme = ref<'light' | 'dark'>('light')
 
-function formatCny(amountCents: number): string {
-  return `¥${(Number(amountCents || 0) / 100).toFixed(2)}`
-}
+let themeObserver: MutationObserver | null = null
 
-function formatDateTime(value: string): string {
-  if (!value) return '-'
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return value
-  return d.toLocaleString()
-}
+const purchaseEnabled = computed(() => {
+  return appStore.cachedPublicSettings?.purchase_subscription_enabled ?? false
+})
 
-function formatOrderSummary(order: OrderRow): string {
-  if (order.skuType === 'subscription') {
-    return `Group ${order.groupId ?? '-'} · ${order.validityDays ?? '-'} 天`
-  }
-  return `余额 +${order.balanceAmount ?? 0}`
-}
+const legacyPurchaseUrl = computed(() => {
+  const baseUrl = (appStore.cachedPublicSettings?.purchase_subscription_url || '').trim()
+  return buildEmbeddedUrl(baseUrl, authStore.user?.id, authStore.token, purchaseTheme.value, locale.value)
+})
 
-function statusBadgeClass(status: string): string {
-  if (status === 'paid' || status === 'fulfilled') {
-    return 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-  }
-  if (status === 'closed' || status === 'failed' || status === 'refunded' || status === 'fulfillment_failed') {
-    return 'bg-rose-50 text-rose-700 border border-rose-200'
-  }
-  return 'bg-amber-50 text-amber-700 border border-amber-200'
-}
-
-function resolveToken(): string {
-  if (typeof window === 'undefined') return ''
-  const qsToken = new URLSearchParams(window.location.search).get('token') || ''
-  const token =
-    qsToken ||
-    (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('pay_embedded_token') : null) ||
-    (typeof localStorage !== 'undefined' ? localStorage.getItem('auth_token') : null) ||
-    ''
-  if (qsToken && typeof sessionStorage !== 'undefined') {
-    sessionStorage.setItem('pay_embedded_token', qsToken)
-  }
-  return token
-}
-
-async function requestJson<T>(url: string, options: RequestInit = {}): Promise<T> {
-  if (!sessionAuthToken.value) {
-    sessionAuthToken.value = resolveToken()
+const hasLegacyPurchaseUrl = computed(() => {
+  const url = legacyPurchaseUrl.value
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    return false
   }
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> | undefined),
-  }
-  if (sessionAuthToken.value) {
-    headers.Authorization = `Bearer ${sessionAuthToken.value}`
-  }
-
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  })
-  const text = await response.text()
-  let json: { error?: string } | null = null
-  if (text) {
-    try {
-      json = JSON.parse(text) as { error?: string }
-    } catch {
-      json = null
-    }
-  }
-
-  if (!response.ok) {
-    const message =
-      (json && (json as { error?: string; message?: string }).error) ||
-      (json && (json as { message?: string }).message) ||
-      `请求失败：HTTP ${response.status}`
-    throw new Error(message)
-  }
-
-  return (json || {}) as T
-}
-
-function buildOrderQuery(): string {
-  const params = new URLSearchParams()
-  params.set('page', String(page.value))
-  params.set('pageSize', String(PAGE_SIZE))
-  if (filters.tradeStatus && filters.tradeStatus !== 'all') params.set('tradeStatus', filters.tradeStatus)
-  if (filters.fulfillmentStatus && filters.fulfillmentStatus !== 'all') {
-    params.set('fulfillmentStatus', filters.fulfillmentStatus)
-  }
-  if (filters.keyword) params.set('keyword', filters.keyword)
-  return params.toString()
-}
-
-function setGlobalError(message: string) {
-  globalError.value = message
-}
-
-function clearErrors() {
-  globalError.value = ''
-  ordersError.value = ''
-}
-
-async function loadPurchase() {
-  clearErrors()
-  const token = resolveToken()
-  if (!token) {
-    setGlobalError('当前未检测到登录 token，请重新登录后再试。')
-    return
-  }
-  const now = Date.now()
-  const cached = purchaseCache.value
-  if (cached && cached.token === token && now - cached.fetchedAt < TTL_MS) {
-    session.user = cached.user
-    catalog.value = cached.catalog
-    return
-  }
-  if (purchaseLoadingPromise) {
-    await purchaseLoadingPromise
-    return
-  }
-  const tokenMatched = token
-  const doLoad = async () => {
-    const [sess, cat] = await Promise.all([
-      requestJson<{ user: PurchaseSession; querySupported: boolean }>('/pay-api/session'),
-      requestJson<CatalogData>('/pay-api/catalog'),
-    ])
-    const nextCatalog: CatalogData = {
-      subscriptions: Array.isArray(cat.subscriptions) ? cat.subscriptions : [],
-      balancePacks: Array.isArray(cat.balancePacks) ? cat.balancePacks : [],
-    }
-    session.user = sess.user
-    catalog.value = nextCatalog
-    purchaseCache.value = {
-      fetchedAt: Date.now(),
-      token: tokenMatched,
-      user: sess.user,
-      catalog: nextCatalog,
-    }
-  }
-  purchaseLoadingPromise = doLoad()
   try {
-    await purchaseLoadingPromise
-  } catch (error) {
-    setGlobalError(error instanceof Error ? error.message : '加载购买页面失败')
-  } finally {
-    if (purchaseLoadingPromise) {
-      purchaseLoadingPromise = null
-    }
+    const parsed = new URL(url)
+    if (typeof window === 'undefined') return true
+    return !(parsed.origin === window.location.origin && parsed.pathname === '/purchase')
+  } catch {
+    return false
   }
+})
+
+const catalogEmpty = computed(() => {
+  return catalog.value.subscriptions.length === 0 && catalog.value.balancePacks.length === 0
+})
+
+function formatAmount(amountCents: number): string {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'CNY',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(amountCents / 100)
 }
 
-async function loadOrders(force = false): Promise<void> {
-  clearErrors()
-  ordersLoading.value = true
+async function loadPage(): Promise<void> {
+  loading.value = true
+  loadError.value = ''
+
   try {
-    const endpoint = isAdminMode.value ? '/pay-api/admin/orders' : '/pay-api/orders'
-    const query = buildOrderQuery()
-    const key = `${endpoint}?${query}`
-    const cached = cache.get(key)
-    const now = Date.now()
-    if (!force && cached && now - cached.fetchedAt < TTL_MS) {
-      const cachedData = cached.data
-      orders.value = cachedData.orders
-      total.value = cachedData.total
-      page.value = cachedData.page
-      totalPages.value = cachedData.totalPages
-      ordersLoading.value = false
+    if (appStore.publicSettingsLoaded === false) {
+      await appStore.fetchPublicSettings()
+    }
+
+    if (!purchaseEnabled.value) {
       return
     }
 
-    const result = await requestJson<OrdersResponse>(`${endpoint}?${query}`)
-    const data: OrdersResponse = {
-      orders: Array.isArray(result.orders) ? result.orders : [],
-      total: Number(result.total || 0),
-      page: Number(result.page || page.value),
-      totalPages: Number(result.totalPages || 1),
-    }
-    orders.value = data.orders
-    total.value = data.total
-    page.value = data.page
-    totalPages.value = Math.max(1, data.totalPages)
-    cache.set(key, { fetchedAt: now, data })
+    const [nextSession, nextCatalog] = await Promise.all([
+      payAPI.getSession(),
+      payAPI.getCatalog()
+    ])
+
+    session.value = nextSession
+    catalog.value = nextCatalog
+    querySupported.value = nextSession.querySupported !== false
   } catch (error) {
-    ordersError.value = error instanceof Error ? error.message : '加载订单失败'
+    loadError.value = isPayApiError(error) ? error.message : t('purchase.loadFailedFallback')
   } finally {
-    ordersLoading.value = false
+    loading.value = false
   }
 }
 
-function applyOrderFilters() {
-  page.value = 1
-  void loadOrders(true)
-}
+async function submitOrder(skuCode: string): Promise<void> {
+  submittingSkuCode.value = skuCode
 
-function resetFilters() {
-  filters.tradeStatus = 'all'
-  filters.fulfillmentStatus = 'all'
-  filters.keyword = ''
-  page.value = 1
-  void loadOrders(true)
-}
-
-function resetPageAndLoad() {
-  page.value = 1
-  void loadOrders()
-}
-
-function changePage(next: number) {
-  if (next < 1 || next > totalPages.value) return
-  page.value = next
-  void loadOrders()
-}
-
-async function createOrder(skuCode: string) {
-  clearErrors()
-  busyCreate.value = skuCode
   try {
-    const response = await requestJson<{ formHtml: string }>('/pay-api/orders', {
-      method: 'POST',
-      body: JSON.stringify({ skuCode }),
-    })
-    if (!response.formHtml || typeof response.formHtml !== 'string') {
-      throw new Error('订单创建成功后未返回支付表单')
+    const result = await payAPI.createOrder(skuCode)
+    appStore.showInfo(t('purchase.redirectingToPay'))
+
+    const host = document.createElement('div')
+    host.style.display = 'none'
+    host.innerHTML = result.formHtml
+    document.body.appendChild(host)
+
+    const form = host.querySelector('form')
+    if (!form) {
+      throw new Error(t('purchase.invalidForm'))
     }
-    const holder = document.createElement('div')
-    holder.style.display = 'none'
-    holder.innerHTML = response.formHtml
-    document.body.appendChild(holder)
-    const form = holder.querySelector('form')
-    if (!form) throw new Error('未找到支付提交表单')
+
     form.submit()
   } catch (error) {
-    setGlobalError(error instanceof Error ? error.message : '创建订单失败')
+    appStore.showError(isPayApiError(error) ? error.message : t('purchase.createOrderFailed'))
   } finally {
-    busyCreate.value = ''
+    submittingSkuCode.value = ''
   }
 }
-
-async function checkOrder(merchantOrderId: string) {
-  clearErrors()
-  busyOrderStatus.value = merchantOrderId
-  try {
-    await requestJson(`/pay-api/orders/${encodeURIComponent(merchantOrderId)}/check`, {
-      method: 'POST',
-      body: '{}',
-    })
-    await loadOrders(true)
-  } catch (error) {
-    ordersError.value = error instanceof Error ? error.message : '刷新订单状态失败'
-  } finally {
-    busyOrderStatus.value = ''
-  }
-}
-
-async function setAdminOrderStatus(merchantOrderId: string, tradeStatus: 'paid' | 'closed') {
-  clearErrors()
-  busyOrderStatus.value = merchantOrderId
-  try {
-    await requestJson(`/pay-api/admin/orders/${encodeURIComponent(merchantOrderId)}/status`, {
-      method: 'POST',
-      body: JSON.stringify({ tradeStatus }),
-    })
-    await loadOrders(true)
-  } catch (error) {
-    ordersError.value = error instanceof Error ? error.message : '更新订单状态失败'
-  } finally {
-    busyOrderStatus.value = ''
-  }
-}
-
-async function loadPageByRoute(forceOrders = false) {
-  clearErrors()
-  sessionAuthToken.value = resolveToken()
-  if (!sessionAuthToken.value) {
-    setGlobalError('当前未检测到登录 token，请重新登录后再试。')
-    return
-  }
-  if (isPurchaseRoute.value === 'purchase') {
-    await loadPurchase()
-    return
-  }
-  page.value = 1
-  await loadOrders(forceOrders)
-}
-
-watch(
-  () => route.path,
-  () => {
-    void loadPageByRoute()
-  },
-)
 
 onMounted(() => {
-  void loadPageByRoute(true)
+  purchaseTheme.value = detectTheme()
+
+  if (typeof document !== 'undefined') {
+    themeObserver = new MutationObserver(() => {
+      purchaseTheme.value = detectTheme()
+    })
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class']
+    })
+  }
+
+  void loadPage()
+})
+
+onUnmounted(() => {
+  if (themeObserver) {
+    themeObserver.disconnect()
+    themeObserver = null
+  }
 })
 </script>

@@ -323,6 +323,7 @@ const isHomeContentUrl = computed(() => {
 });
 
 // Theme
+const isDark = ref(document.documentElement.classList.contains("dark"));
 
 // Auth state
 const isAuthenticated = computed(() => authStore.isAuthenticated);
@@ -353,7 +354,21 @@ function gotoLogin(){
 function gotoDoc() {
   window.open(docUrl.value, '_blank', 'noopener,noreferrer');
 }
+// Initialize theme
+function initTheme() {
+  const savedTheme = localStorage.getItem("theme");
+  if (
+    savedTheme === "dark" ||
+    (!savedTheme && window.matchMedia("(prefers-color-scheme: dark)").matches)
+  ) {
+    isDark.value = true;
+    document.documentElement.classList.add("dark");
+  }
+}
+
 onMounted(() => {
+  initTheme();
+
   // Check auth state
   authStore.checkAuth();
 

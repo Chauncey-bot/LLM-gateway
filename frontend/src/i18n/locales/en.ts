@@ -403,7 +403,6 @@ export default {
     announcements: 'Announcements',
     apiKeys: 'API Keys',
     usage: 'Usage',
-    orders: 'Order Management',
     redeem: 'Redeem',
     referrals: 'Referrals',
     pointsMall: 'Points Mall',
@@ -425,6 +424,7 @@ export default {
     logout: 'Logout',
     github: 'GitHub',
     mySubscriptions: 'My Subscriptions',
+    orders: 'Orders',
     buySubscription: 'Recharge / Subscription',
     docs: 'Docs',
     sora: 'Sora Studio'
@@ -4815,18 +4815,122 @@ export default {
   // Recharge / Subscription Page
   purchase: {
     title: 'Recharge / Subscription',
-    description: 'Recharge balance or purchase subscription via the embedded page',
+    description:
+      'Complete subscription purchases or balance recharge directly inside the console, then let the server confirm payment and fulfillment.',
     openInNewTab: 'Open in new tab',
+    openLegacyPage: 'Open legacy purchase page',
+    queryUnavailable:
+      'Payment query is currently disabled. Orders can still be created, but final payment confirmation may require manual follow-up.',
     notEnabledTitle: 'Feature not enabled',
     notEnabledDesc: 'The administrator has not enabled the recharge/subscription entry. Please contact admin.',
     notConfiguredTitle: 'Recharge / Subscription URL not configured',
     notConfiguredDesc:
-      'The administrator enabled the entry but has not configured a recharge/subscription URL. Please contact admin.'
+      'The administrator enabled the entry but has not configured a recharge/subscription URL. Please contact admin.',
+    loadFailedTitle: 'Failed to load purchase page',
+    loadFailedFallback: 'Failed to load the purchase page. Please try again later.',
+    retry: 'Retry',
+    currentAccount: 'Fulfillment account',
+    currentAccountHint: 'Successful orders will be delivered directly to this account.',
+    userId: 'User ID',
+    queryStatus: 'Payment query',
+    queryStatusEnabled: 'Enabled',
+    queryStatusDisabled: 'Disabled',
+    emptyCatalogTitle: 'No products available',
+    emptyCatalogDesc:
+      'The payment service does not currently expose any sellable SKUs. Check catalog.json and payment service deployment.',
+    subscriptionPlans: 'Subscription plans',
+    subscriptionPlansDesc: 'Best for fixed group assignment and time-based access.',
+    balancePacks: 'Balance recharge',
+    balancePacksDesc: 'Best for topping up account balance for future API usage.',
+    noDescription: 'No description provided',
+    groupId: 'Group ID',
+    validityDays: 'Validity (days)',
+    balanceAmount: 'Balance credit',
+    buyNow: 'Pay now',
+    creatingOrder: 'Creating order...',
+    redirectingToPay: 'Order created. Redirecting to Alipay.',
+    invalidForm: 'The payment platform did not return a valid form.',
+    createOrderFailed: 'Failed to create payment order. Please try again later.',
+    emptySubscriptions: 'There are no subscription plans available right now.',
+    emptyBalancePacks: 'There are no balance recharge packs available right now.'
   },
 
   orders: {
     title: 'Order Management',
-    description: 'View and manage order records'
+    description: 'View payment orders, payment status, and fulfillment status for the current account.',
+    adminDescription:
+      'View all payment orders and filter them by payment status, fulfillment status, or keyword.',
+    returnTitle: 'Payment Confirmation',
+    returnDescription:
+      'The browser redirect only indicates that the payment flow returned. The final result depends on server-side payment query and fulfillment state.',
+    returnErrorTitle: 'Unable to confirm order',
+    returnMissingOrderId: 'Missing merchantOrderId. Unable to confirm this order.',
+    returnStatusTitle: 'Current order status',
+    loadFailedTitle: 'Failed to load orders',
+    loadFailedFallback: 'Failed to load orders. Please try again later.',
+    emptyTitle: 'No orders yet',
+    emptyDesc:
+      'There are no matching orders for this account yet. You can create one from the purchase page.',
+    emptyAdminDesc: 'No orders matched the current filters.',
+    keywordPlaceholder: 'Search by order ID or SKU',
+    keywordPlaceholderAdmin: 'Search by order ID, SKU, email, or username',
+    apply: 'Search',
+    reset: 'Reset',
+    refresh: 'Refresh',
+    retry: 'Retry',
+    total: '{total} orders',
+    platformOrderNo: 'Platform order no.',
+    lastCheckedAt: 'Last checked',
+    checkStatus: 'Refresh status',
+    markPaid: 'Mark paid',
+    markClosed: 'Close order',
+    noActions: 'No actions',
+    backToOrders: 'Back to my orders',
+    backToPurchase: 'Continue purchasing',
+    queryUnavailable:
+      'Payment query is currently disabled. Existing orders are still listed, but the latest payment status cannot be confirmed automatically.',
+    updateStatusSuccess: 'Order status updated.',
+    updateStatusFailed: 'Failed to update order status. Please try again later.',
+    refreshFailed: 'Failed to refresh order status. Please try again later.',
+    unknownError: 'Unknown error',
+    checkResultQueryUnavailable:
+      'The order has been recorded, but payment query is currently unavailable. Please retry later or ask an administrator to verify it manually.',
+    checkResultFulfilled: 'Payment confirmed. Subscription or balance has been fulfilled successfully.',
+    checkResultFulfillmentFailed: 'Payment confirmed, but fulfillment failed: {reason}',
+    checkResultTradeStopped: 'The current payment status is {status}, so fulfillment was not executed.',
+    checkResultPending:
+      'The order is still being confirmed. Once payment settles, it will enter fulfillment automatically. Please retry later.',
+    subscriptionSummary: 'Group {groupId} / {validityDays} days',
+    balanceSummary: 'Balance +{balanceAmount}',
+    types: {
+      subscription: 'Subscription',
+      balance: 'Balance'
+    },
+    columns: {
+      orderId: 'Order ID',
+      user: 'User',
+      type: 'Type',
+      sku: 'SKU',
+      paymentStatus: 'Payment',
+      fulfillmentStatus: 'Fulfillment',
+      amount: 'Amount',
+      createdAt: 'Created at',
+      actions: 'Actions'
+    },
+    tradeStatusOptions: {
+      all: 'All payment states',
+      pending: 'Pending',
+      paid: 'Paid',
+      closed: 'Closed',
+      failed: 'Failed',
+      refunded: 'Refunded'
+    },
+    fulfillmentStatusOptions: {
+      all: 'All fulfillment states',
+      pending: 'Pending',
+      fulfilled: 'Fulfilled',
+      fulfillment_failed: 'Fulfillment failed'
+    }
   },
 
   // Custom Page (iframe embed)
