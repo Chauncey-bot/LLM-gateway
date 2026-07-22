@@ -18,6 +18,7 @@ const messages: Record<string, string> = {
   'admin.dashboard.tokens': 'Tokens',
   'admin.dashboard.actual': 'Actual',
   'admin.dashboard.standard': 'Standard',
+  'admin.dashboard.averageCost': 'Average Cost',
   'admin.dashboard.metricTokens': 'By Tokens',
   'admin.dashboard.metricActualCost': 'By Actual Cost',
   'admin.dashboard.noDataAvailable': 'No data available',

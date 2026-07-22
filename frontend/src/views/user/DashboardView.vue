@@ -185,6 +185,20 @@ const formatLD = (d: Date) => d.toISOString().split('T')[0]
 const startDate = ref(formatLD(new Date(Date.now() - 6 * 86400000)))
 const endDate = ref(formatLD(new Date()))
 const granularity = ref<'day' | 'hour'>('day')
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+
+function toLocalDateStart(date: Date): Date {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+function getDaysRemaining(expiresAt: string): number {
+  const expiresDate = toLocalDateStart(new Date(expiresAt))
+  const nowDate = toLocalDateStart(new Date())
+  if (isNaN(expiresDate.getTime())) return -1
+  return Math.floor((expiresDate.getTime() - nowDate.getTime()) / MS_PER_DAY)
+}
 
 const numberLocale = computed(() => locale.value === 'zh' ? 'zh-CN' : 'en-US')
 const formatNumber = (value: number) => value.toLocaleString(numberLocale.value)
@@ -280,8 +294,16 @@ const loadReferralStats = async () => {
 const formatSubscriptionExpiry = (expiresAt: string | null) => {
   if (!expiresAt) return t('dashboard.neverExpires')
   const expires = new Date(expiresAt)
-  const days = Math.ceil((expires.getTime() - Date.now()) / 86400000)
-  const date = expires.toLocaleDateString(numberLocale.value, { month: '2-digit', day: '2-digit' })
+  const days = getDaysRemaining(expiresAt)
+  const date = expires.toLocaleString(numberLocale.value, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
   if (days <= 0) return t('dashboard.expiresOn', { date })
   return t('dashboard.daysRemaining', { date, days })
 }

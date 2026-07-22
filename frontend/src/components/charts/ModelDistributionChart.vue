@@ -114,7 +114,7 @@
               <th class="pb-2 text-right">{{ t('admin.dashboard.requests') }}</th>
               <th class="pb-2 text-right">{{ t('admin.dashboard.tokens') }}</th>
               <th class="pb-2 text-right">{{ t('admin.dashboard.actual') }}</th>
-              <th class="pb-2 text-right">{{ t('admin.dashboard.standard') }}</th>
+              <th class="pb-2 text-right">{{ t('admin.dashboard.averageCost') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -143,7 +143,7 @@
                   ${{ formatCost(model.actual_cost) }}
                 </td>
                 <td class="py-1.5 text-right text-gray-400 dark:text-gray-500">
-                  ${{ formatCost(model.cost) }}
+                  ${{ formatAverageCost(model.actual_cost, model.requests) }}
                 </td>
               </tr>
               <tr v-if="expandedKey === `model-${model.model}`">
@@ -498,5 +498,11 @@ const formatCost = (value: number): string => {
     return value.toFixed(3)
   }
   return value.toFixed(4)
+}
+
+const formatAverageCost = (actualCost: number, requests: number): string => {
+  const safeRequests = Math.max(requests, 0)
+  const average = safeRequests > 0 ? actualCost / safeRequests : 0
+  return average.toFixed(4)
 }
 </script>

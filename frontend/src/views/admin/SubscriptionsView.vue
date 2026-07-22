@@ -349,7 +349,7 @@
                     : 'text-gray-700 dark:text-gray-300'
                 "
               >
-                {{ formatDateOnly(value) }}
+                {{ formatSubscriptionExpiration(value) }}
               </span>
               <div v-if="getDaysRemaining(value) !== null" class="text-xs text-gray-500">
                 {{ getDaysRemaining(value) }} {{ t('admin.subscriptions.daysRemaining') }}
@@ -588,7 +588,7 @@
             <span class="font-medium text-gray-900 dark:text-white">
               {{
                 extendingSubscription.expires_at
-                  ? formatDateOnly(extendingSubscription.expires_at)
+                  ? formatSubscriptionExpiration(extendingSubscription.expires_at)
                   : t('admin.subscriptions.noExpiration')
               }}
             </span>
@@ -743,7 +743,7 @@ import { adminAPI } from '@/api/admin'
 import type { UserSubscription, Group, GroupPlatform, SubscriptionType } from '@/types'
 import type { SimpleUser } from '@/api/admin/usage'
 import type { Column } from '@/components/common/types'
-import { formatDateOnly } from '@/utils/format'
+import { formatDateTime } from '@/utils/format'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -1283,17 +1283,40 @@ const confirmResetQuota = async () => {
 }
 
 // Helper functions
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+
+function toLocalDateStart(date: Date): Date {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
 const getDaysRemaining = (expiresAt: string): number | null => {
-  const now = new Date()
-  const expires = new Date(expiresAt)
-  const diff = expires.getTime() - now.getTime()
-  if (diff < 0) return null
-  return Math.ceil(diff / (1000 * 60 * 60 * 24))
+  const expiresDate = toLocalDateStart(new Date(expiresAt))
+  const nowDate = toLocalDateStart(new Date())
+  if (isNaN(expiresDate.getTime())) return null
+  const days = Math.floor((expiresDate.getTime() - nowDate.getTime()) / MS_PER_DAY)
+  if (days < 0) return null
+  return days
 }
 
 const isExpiringSoon = (expiresAt: string): boolean => {
   const days = getDaysRemaining(expiresAt)
-  return days !== null && days <= 7
+  return days !== null && days <= 7 && days > -1
+}
+
+const formatSubscriptionExpiration = (expiresAt: string): string => {
+  const expires = new Date(expiresAt)
+  if (isNaN(expires.getTime())) return t('admin.subscriptions.expired')
+  return formatDateTime(expires, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
 }
 
 const getProgressWidth = (used: number | null | undefined, limit: number | null): string => {

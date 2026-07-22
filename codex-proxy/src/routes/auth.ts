@@ -196,9 +196,23 @@ export function createAuthRoutes(
   // ── CLI Token Import ───────────────────────────────────────────
 
   // POST /auth/import-cli — import token from Codex CLI auth.json
+  // Accept body: { authFilePath?: string }
   app.post("/auth/import-cli", async (c) => {
+    let authFilePath: string | undefined;
     try {
-      const cliAuth = importCliAuth();
+      const body = await c.req.json<{ authFilePath?: string }>();
+      if (body?.authFilePath && typeof body.authFilePath === "string") {
+        const trimmed = body.authFilePath.trim();
+        if (trimmed.length > 0) {
+          authFilePath = trimmed;
+        }
+      }
+    } catch {
+      // No body / malformed body — keep default path behavior for compatibility.
+    }
+
+    try {
+      const cliAuth = importCliAuth(authFilePath);
       const entryId = pool.addAccount(cliAuth.access_token!, cliAuth.refresh_token);
       scheduler.scheduleOne(entryId, cliAuth.access_token!);
 

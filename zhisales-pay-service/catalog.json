@@ -28,6 +28,15 @@
       "validity_days": 30
     },
     {
+      "code": "coding-plan-daily-10",
+      "enabled": true,
+      "title": "OpenAI 10 Daily Test",
+      "description": "20 RMB test plan, 10 USD daily limit.",
+      "amount_cents": 2000,
+      "group_id": 15,
+      "validity_days": 30
+    },
+    {
       "code": "coding-plan-daily-800",
       "enabled": false,
       "title": "OpenAI 800 Daily",
@@ -37,12 +46,30 @@
       "validity_days": 30
     },
     {
+      "code": "coding-plan-daily-400",
+      "enabled": true,
+      "title": "Coding Plan 400 Daily",
+      "description": "1000 RMB per month, 400 USD daily limit.",
+      "amount_cents": 100000,
+      "group_id": 16,
+      "validity_days": 30
+    },
+    {
       "code": "coding-plan-daily-1600",
       "enabled": true,
       "title": "Coding Plan 1600 Daily",
       "description": "4000 RMB per month, 1600 USD daily limit.",
       "amount_cents": 400000,
       "group_id": 18,
+      "validity_days": 30
+    },
+    {
+      "code": "coding-plan-daily-300",
+      "enabled": true,
+      "title": "Coding Plan 300 Daily",
+      "description": "750 RMB per month, 300 USD daily limit.",
+      "amount_cents": 75000,
+      "group_id": 21,
       "validity_days": 30
     },
     {

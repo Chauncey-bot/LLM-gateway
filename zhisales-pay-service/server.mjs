@@ -42,6 +42,12 @@ const adminSession = {
   token: null,
   expiresAt: 0,
 };
+
+const HIDDEN_SKU_CODES = new Set([
+  "coding-plan-daily-1200",
+  "coding-plan-daily-1600"
+]);
+const HIDDEN_SKU_AMOUNT_CENTS = new Set([300000, 400000]);
 const paymentPollIntervalMs = Number(process.env.PAYMENT_POLL_INTERVAL_MS || 60_000);
 let paymentPollTimer = null;
 
@@ -228,7 +234,17 @@ async function readCatalog() {
 async function getEnabledCatalog() {
   const catalog = await readCatalog();
   return {
-    subscriptions: catalog.subscriptions.filter((item) => item.enabled && Number(item.amount_cents) > 0),
+    subscriptions: catalog.subscriptions.filter((item) => {
+      const amountCents = Number(item.amount_cents);
+      if (!item.enabled || Number.isNaN(amountCents) || amountCents <= 0) {
+        return false;
+      }
+
+      if (HIDDEN_SKU_CODES.has(item.code)) {
+        return false;
+      }
+      return !HIDDEN_SKU_AMOUNT_CENTS.has(amountCents);
+    }),
     balancePacks: catalog.balancePacks.filter((item) => item.enabled && Number(item.amount_cents) > 0),
   };
 }
@@ -1107,15 +1123,17 @@ app.get("/pay-api/catalog", async (_req, res) => {
   try {
     const catalog = await getEnabledCatalog();
     res.setHeader("Cache-Control", "no-store");
-    res.json({
-      subscriptions: catalog.subscriptions.map((item) => ({
+    const sortedSubscriptions = catalog.subscriptions
+      .map((item) => ({
         code: item.code,
         title: item.title,
         description: item.description,
         amountCents: Number(item.amount_cents),
-        groupId: Number(item.group_id),
         validityDays: Number(item.validity_days || 30),
-      })),
+      }))
+      .sort((a, b) => a.amountCents - b.amountCents);
+    res.json({
+      subscriptions: sortedSubscriptions,
       balancePacks: catalog.balancePacks.map((item) => ({
         code: item.code,
         title: item.title,

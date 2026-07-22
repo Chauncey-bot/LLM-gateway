@@ -248,13 +248,27 @@ import subscriptionsAPI from '@/api/subscriptions'
 import type { UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { formatDateOnly } from '@/utils/format'
+import { formatDateTime } from '@/utils/format'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 
 const subscriptions = ref<UserSubscription[]>([])
 const loading = ref(true)
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+
+function toLocalDateStart(date: Date): Date {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+function getDaysRemaining(expiresAt: string): number {
+  const expiresDate = toLocalDateStart(new Date(expiresAt))
+  const nowDate = toLocalDateStart(new Date())
+  if (isNaN(expiresDate.getTime())) return -1
+  return Math.floor((expiresDate.getTime() - nowDate.getTime()) / MS_PER_DAY)
+}
 
 async function loadSubscriptions() {
   try {
@@ -283,16 +297,25 @@ function getProgressBarClass(used: number | undefined, limit: number | null | un
 }
 
 function formatExpirationDate(expiresAt: string): string {
-  const now = new Date()
-  const expires = new Date(expiresAt)
-  const diff = expires.getTime() - now.getTime()
-  const days = Math.ceil(diff / (1000 * 60 * 60 * 24))
+  const days = getDaysRemaining(expiresAt)
+  const expiry = new Date(expiresAt)
+  if (isNaN(expiry.getTime())) {
+    return t('userSubscriptions.status.expired')
+  }
 
   if (days < 0) {
     return t('userSubscriptions.status.expired')
   }
 
-  const dateStr = formatDateOnly(expires)
+  const dateStr = formatDateTime(expiry, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
 
   if (days === 0) {
     return `${dateStr} (Today)`
@@ -305,10 +328,7 @@ function formatExpirationDate(expiresAt: string): string {
 }
 
 function getExpirationClass(expiresAt: string): string {
-  const now = new Date()
-  const expires = new Date(expiresAt)
-  const diff = expires.getTime() - now.getTime()
-  const days = Math.ceil(diff / (1000 * 60 * 60 * 24))
+  const days = getDaysRemaining(expiresAt)
 
   if (days <= 0) return 'text-red-600 dark:text-red-400 font-medium'
   if (days <= 3) return 'text-red-600 dark:text-red-400'

@@ -428,6 +428,11 @@ export interface CliAuthJson {
   refresh_token?: string;
   id_token?: string;
   expires_at?: number;
+  tokens?: {
+    access_token?: string;
+    refresh_token?: string;
+    id_token?: string;
+  };
 }
 
 /**
@@ -455,9 +460,9 @@ export function startOAuthFlow(
  * Read and parse the Codex CLI auth.json file.
  * Path: $CODEX_HOME/auth.json (default: ~/.codex/auth.json)
  */
-export function importCliAuth(): CliAuthJson {
+export function importCliAuth(authFilePath?: string): CliAuthJson {
   const codexHome = process.env.CODEX_HOME || resolve(homedir(), ".codex");
-  const authPath = resolve(codexHome, "auth.json");
+  const authPath = authFilePath ? resolve(authFilePath) : resolve(codexHome, "auth.json");
 
   if (!existsSync(authPath)) {
     throw new Error(`CLI auth file not found: ${authPath}`);
@@ -465,12 +470,24 @@ export function importCliAuth(): CliAuthJson {
 
   const raw = readFileSync(authPath, "utf-8");
   const data = JSON.parse(raw) as CliAuthJson;
+  const nestedAccessToken = data.tokens?.access_token?.trim();
+  const nestedRefreshToken = data.tokens?.refresh_token?.trim();
+  const nestedIdToken = data.tokens?.id_token?.trim();
 
-  if (!data.access_token) {
+  const accessToken = data.access_token?.trim() || nestedAccessToken;
+  const refreshToken = data.refresh_token?.trim() || nestedRefreshToken;
+  const idToken = data.id_token?.trim() || nestedIdToken;
+
+  if (!accessToken) {
     throw new Error("CLI auth.json does not contain access_token");
   }
 
-  return data;
+  return {
+    ...data,
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    id_token: idToken,
+  };
 }
 
 function callbackResultHtml(success: boolean, error?: string): string {

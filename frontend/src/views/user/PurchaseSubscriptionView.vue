@@ -119,11 +119,11 @@
             </div>
 
             <div
-              v-if="catalog.subscriptions.length > 0"
+              v-if="visibleSubscriptions.length > 0"
               class="grid gap-5 md:grid-cols-2 xl:grid-cols-3"
             >
               <article
-                v-for="item in catalog.subscriptions"
+                v-for="item in visibleSubscriptions"
                 :key="item.code"
                 class="card card-hover flex h-full flex-col overflow-hidden"
               >
@@ -151,18 +151,10 @@
                     {{ formatAmount(item.amountCents) }}
                   </div>
 
-                  <div class="grid gap-3 text-sm text-gray-500 dark:text-dark-400 sm:grid-cols-2">
-                    <div class="rounded-2xl bg-slate-50 px-3 py-2 dark:bg-white/5">
-                      <div class="text-xs uppercase tracking-wide">{{ t('purchase.groupId') }}</div>
-                      <div class="mt-1 font-medium text-slate-900 dark:text-white">
-                        {{ item.groupId ?? '-' }}
-                      </div>
-                    </div>
-                    <div class="rounded-2xl bg-slate-50 px-3 py-2 dark:bg-white/5">
-                      <div class="text-xs uppercase tracking-wide">{{ t('purchase.validityDays') }}</div>
-                      <div class="mt-1 font-medium text-slate-900 dark:text-white">
-                        {{ item.validityDays ?? '-' }}
-                      </div>
+                  <div class="rounded-2xl bg-slate-50 px-3 py-2 dark:bg-white/5">
+                    <div class="text-xs uppercase tracking-wide">{{ t('purchase.validityDays') }}</div>
+                    <div class="mt-1 font-medium text-slate-900 dark:text-white">
+                      {{ item.validityDays ?? '-' }}
                     </div>
                   </div>
 
@@ -183,7 +175,7 @@
             </div>
           </section>
 
-          <section class="space-y-4">
+        <section class="space-y-4">
             <div>
               <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
                 {{ t('purchase.balancePacks') }}
@@ -194,11 +186,11 @@
             </div>
 
             <div
-              v-if="catalog.balancePacks.length > 0"
+              v-if="visibleBalancePacks.length > 0"
               class="grid gap-5 md:grid-cols-2 xl:grid-cols-3"
             >
               <article
-                v-for="item in catalog.balancePacks"
+                v-for="item in visibleBalancePacks"
                 :key="item.code"
                 class="card card-hover flex h-full flex-col overflow-hidden"
               >
@@ -288,6 +280,20 @@ const purchaseTheme = ref<'light' | 'dark'>('light')
 
 let themeObserver: MutationObserver | null = null
 
+const hiddenCatalogAmountCents = new Set<number | string>([300000, 400000, '300000', '400000'])
+
+const isCatalogItemHidden = (amountCents: number | string): boolean => {
+  const normalizedAmount = Number(amountCents)
+  return hiddenCatalogAmountCents.has(normalizedAmount) || hiddenCatalogAmountCents.has(String(amountCents))
+}
+
+const visibleSubscriptions = computed(() =>
+  catalog.value.subscriptions.filter((item) => !isCatalogItemHidden(item.amountCents))
+)
+const visibleBalancePacks = computed(() =>
+  catalog.value.balancePacks.filter((item) => !isCatalogItemHidden(item.amountCents))
+)
+
 const purchaseEnabled = computed(() => {
   return appStore.cachedPublicSettings?.purchase_subscription_enabled ?? false
 })
@@ -313,7 +319,7 @@ const hasLegacyPurchaseUrl = computed(() => {
 })
 
 const catalogEmpty = computed(() => {
-  return catalog.value.subscriptions.length === 0 && catalog.value.balancePacks.length === 0
+  return visibleSubscriptions.value.length === 0 && visibleBalancePacks.value.length === 0
 })
 
 function formatAmount(amountCents: number): string {

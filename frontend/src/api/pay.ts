@@ -21,7 +21,6 @@ export interface PaymentCatalogSubscription {
   title: string
   description: string
   amountCents: number
-  groupId: number | null
   validityDays: number | null
 }
 

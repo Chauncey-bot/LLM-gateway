@@ -709,67 +709,64 @@
           </div>
         </div>
 
-        <!-- Quota Limit Section -->
+        <!-- Daily Limit Section -->
         <div class="space-y-3">
-          <label class="input-label">{{ t('keys.quotaLimit') }}</label>
-          <!-- Switch commented out - always show input, 0 = unlimited
-          <div class="flex items-center justify-between">
-            <label class="input-label mb-0">{{ t('keys.quotaLimit') }}</label>
-            <button
-              type="button"
-              @click="formData.enable_quota = !formData.enable_quota"
-              :class="[
-                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-                formData.enable_quota ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
-            >
-              <span
-                :class="[
-                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  formData.enable_quota ? 'translate-x-4' : 'translate-x-0'
-                ]"
-              />
-            </button>
-          </div>
-          -->
-
+          <label class="input-label">{{ t('keys.dailyLimit') }}</label>
           <div class="space-y-4">
             <div>
               <div class="relative">
                 <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
                 <input
-                  v-model.number="formData.quota"
+                  v-model.number="formData.rate_limit_1d"
                   type="number"
                   step="0.01"
                   min="0"
                   class="input pl-7"
-                  :placeholder="t('keys.quotaAmountPlaceholder')"
+                  :placeholder="t('keys.dailyLimitPlaceholder')"
                 />
               </div>
-              <p class="input-hint">{{ t('keys.quotaAmountHint') }}</p>
+              <p class="input-hint">{{ t('keys.dailyLimitHint') }}</p>
             </div>
 
-            <!-- Quota used display (only in edit mode) -->
-            <div v-if="showEditModal && selectedKey && selectedKey.quota > 0">
-              <label class="input-label">{{ t('keys.quotaUsed') }}</label>
+            <!-- Daily limit usage display (only in edit mode) -->
+            <div v-if="showEditModal && selectedKey && selectedKey.rate_limit_1d > 0">
+              <label class="input-label">{{ t('keys.dailyLimitUsed') }}</label>
               <div class="flex items-center gap-2">
                 <div class="flex-1 rounded-lg bg-gray-100 px-3 py-2 dark:bg-dark-700">
-                  <span class="font-medium text-gray-900 dark:text-white">
-                    ${{ selectedKey.quota_used?.toFixed(4) || '0.0000' }}
+                  <span
+                    :class="[
+                      'font-medium',
+                      selectedKey.usage_1d >= selectedKey.rate_limit_1d ? 'text-red-500' :
+                      selectedKey.usage_1d >= selectedKey.rate_limit_1d * 0.8 ? 'text-yellow-500' :
+                      'text-gray-900 dark:text-white'
+                    ]"
+                  >
+                    ${{ selectedKey.usage_1d?.toFixed(4) || '0.0000' }}
                   </span>
                   <span class="mx-2 text-gray-400">/</span>
                   <span class="text-gray-500 dark:text-gray-400">
-                    ${{ selectedKey.quota?.toFixed(2) || '0.00' }}
+                    ${{ selectedKey.rate_limit_1d?.toFixed(2) || '0.00' }}
                   </span>
                 </div>
                 <button
                   type="button"
-                  @click="confirmResetQuota"
+                  @click="confirmResetRateLimit"
                   class="btn btn-secondary text-sm"
-                  :title="t('keys.resetQuotaUsed')"
+                  :title="t('keys.resetDailyLimitUsed')"
                 >
                   {{ t('keys.reset') }}
                 </button>
+              </div>
+              <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600">
+                <div
+                  :class="[
+                    'h-full rounded-full transition-all',
+                    selectedKey.usage_1d >= selectedKey.rate_limit_1d ? 'bg-red-500' :
+                    selectedKey.usage_1d >= selectedKey.rate_limit_1d * 0.8 ? 'bg-yellow-500' :
+                    'bg-green-500'
+                  ]"
+                  :style="{ width: Math.min((selectedKey.usage_1d / selectedKey.rate_limit_1d) * 100, 100) + '%' }"
+                />
               </div>
             </div>
           </div>
@@ -839,52 +836,6 @@
                       'bg-green-500'
                     ]"
                     :style="{ width: Math.min((selectedKey.usage_5h / selectedKey.rate_limit_5h) * 100, 100) + '%' }"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <!-- Daily Limit -->
-            <div>
-              <label class="input-label">{{ t('keys.rateLimit1d') }}</label>
-              <div class="relative">
-                <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
-                <input
-                  v-model.number="formData.rate_limit_1d"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  class="input pl-7"
-                  :placeholder="'0'"
-                />
-              </div>
-              <!-- Usage info (edit mode only) -->
-              <div v-if="showEditModal && selectedKey && selectedKey.rate_limit_1d > 0" class="mt-2">
-                <div class="flex items-center gap-2">
-                  <div class="flex-1 rounded-lg bg-gray-100 px-3 py-2 dark:bg-dark-700 text-sm">
-                    <span :class="[
-                      'font-medium',
-                      selectedKey.usage_1d >= selectedKey.rate_limit_1d ? 'text-red-500' :
-                      selectedKey.usage_1d >= selectedKey.rate_limit_1d * 0.8 ? 'text-yellow-500' :
-                      'text-gray-900 dark:text-white'
-                    ]">
-                      ${{ selectedKey.usage_1d?.toFixed(4) || '0.0000' }}
-                    </span>
-                    <span class="mx-2 text-gray-400">/</span>
-                    <span class="text-gray-500 dark:text-gray-400">
-                      ${{ selectedKey.rate_limit_1d?.toFixed(2) || '0.00' }}
-                    </span>
-                  </div>
-                </div>
-                <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600">
-                  <div
-                    :class="[
-                      'h-full rounded-full transition-all',
-                      selectedKey.usage_1d >= selectedKey.rate_limit_1d ? 'bg-red-500' :
-                      selectedKey.usage_1d >= selectedKey.rate_limit_1d * 0.8 ? 'bg-yellow-500' :
-                      'bg-green-500'
-                    ]"
-                    :style="{ width: Math.min((selectedKey.usage_1d / selectedKey.rate_limit_1d) * 100, 100) + '%' }"
                   />
                 </div>
               </div>
@@ -1540,11 +1491,11 @@ const editKey = (key: ApiKey) => {
     enable_ip_restriction: hasIPRestriction,
     ip_whitelist: (key.ip_whitelist || []).join('\n'),
     ip_blacklist: (key.ip_blacklist || []).join('\n'),
-    enable_quota: key.quota > 0,
-    quota: key.quota > 0 ? key.quota : null,
-    enable_rate_limit: (key.rate_limit_5h > 0) || (key.rate_limit_1d > 0) || (key.rate_limit_7d > 0),
+    enable_quota: false,
+    quota: null,
+    enable_rate_limit: (key.rate_limit_5h > 0) || (key.rate_limit_7d > 0),
     rate_limit_5h: key.rate_limit_5h || null,
-    rate_limit_1d: key.rate_limit_1d || null,
+    rate_limit_1d: key.rate_limit_1d > 0 ? key.rate_limit_1d : (key.quota > 0 ? key.quota : null),
     rate_limit_7d: key.rate_limit_7d || null,
     enable_expiration: hasExpiration,
     expiration_preset: 'custom',
@@ -1654,8 +1605,8 @@ const handleSubmit = async () => {
   const ipWhitelist = formData.value.enable_ip_restriction ? parseIPList(formData.value.ip_whitelist) : []
   const ipBlacklist = formData.value.enable_ip_restriction ? parseIPList(formData.value.ip_blacklist) : []
 
-  // Calculate quota value (null/empty/0 = unlimited, stored as 0)
-  const quota = formData.value.quota && formData.value.quota > 0 ? formData.value.quota : 0
+  // "额度限制" now maps to the daily spending cap, so this dialog no longer writes cumulative quota.
+  const quota = 0
 
   // Calculate expiration
   let expiresInDays: number | undefined
@@ -1771,11 +1722,6 @@ const closeModals = () => {
     expiration_preset: '30',
     expiration_date: ''
   }
-}
-
-// Show reset quota confirmation dialog
-const confirmResetQuota = () => {
-  showResetQuotaDialog.value = true
 }
 
 // Set expiration date based on quick select days
