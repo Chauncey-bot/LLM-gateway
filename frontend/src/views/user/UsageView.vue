@@ -212,7 +212,7 @@
                       <th class="pb-2 text-right font-semibold">{{ t('dashboard.requests') }}</th>
                       <th class="pb-2 text-right font-semibold">{{ t('dashboard.tokens') }}</th>
                       <th class="pb-2 text-right font-semibold">{{ t('dashboard.actual') }}</th>
-                      <th class="pb-2 text-right font-semibold">{{ t('dashboard.standard') }}</th>
+                      <th class="pb-2 text-right font-semibold">{{ t('dashboard.averageCost') }}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -242,7 +242,7 @@
                         ${{ formatCost(model.actual_cost) }}
                       </td>
                       <td class="py-2.5 text-right text-slate-500 dark:text-slate-400">
-                        ${{ formatCost(model.cost) }}
+                        ${{ formatAverageCost(model.actual_cost, model.requests) }}
                       </td>
                     </tr>
                   </tbody>
@@ -299,7 +299,8 @@
                     <tr class="border-b border-slate-200 text-slate-500 dark:border-white/10 dark:text-slate-400">
                       <th class="pb-2 text-left font-semibold">{{ t('usage.apiKeyFilter') }}</th>
                       <th class="pb-2 text-right font-semibold">{{ t('usage.requests') }}</th>
-                      <th class="pb-2 text-right font-semibold">{{ t('usage.cost') }}</th>
+                      <th class="pb-2 text-right font-semibold">{{ t('usage.actualCost') }}</th>
+                      <th class="pb-2 text-right font-semibold">{{ t('usage.averageCost') }}</th>
                       <th class="pb-2 text-right font-semibold">%</th>
                     </tr>
                   </thead>
@@ -325,6 +326,9 @@
                       </td>
                       <td class="py-2.5 text-right font-semibold text-emerald-600 dark:text-emerald-400">
                         ${{ formatCost(item.actualCost) }}
+                      </td>
+                      <td class="py-2.5 text-right font-semibold text-emerald-600 dark:text-emerald-400">
+                        ${{ formatAverageCost(item.actualCost, item.requests) }}
                       </td>
                       <td class="py-2.5 text-right text-slate-600 dark:text-slate-300">
                         {{ item.percent.toFixed(1) }}%
@@ -965,6 +969,12 @@ const keySpendChartOptions = computed(() => ({
     }
   }
 }))
+
+const formatAverageCost = (actualCost: number, requests: number): string => {
+  const safeRequests = Math.max(requests, 0)
+  const average = safeRequests > 0 ? actualCost / safeRequests : 0
+  return average.toFixed(4)
+}
 
 const refreshChart = async (chartKey: typeof modelDistributionChartRenderKey) => {
   await nextTick()
