@@ -229,9 +229,9 @@
               <div class="api-key-detail api-key-detail-usage">
                 <span>{{ t('keys.usage') }}</span>
                 <strong class="api-key-usage-line">
-                  {{ t('keys.today') }} ${{ (usageStats[row.id]?.today_actual_cost ?? 0).toFixed(4) }}
+                  {{ t('keys.today') }} ${{ getTodayActualCost(row).toFixed(4) }}
                   <span class="mx-1 text-gray-300 dark:text-gray-600">/</span>
-                  {{ t('keys.total') }} ${{ (usageStats[row.id]?.total_actual_cost ?? 0).toFixed(4) }}
+                  {{ t('keys.total') }} ${{ getTotalActualCost(row).toFixed(4) }}
                 </strong>
                 <div v-if="row.quota > 0" class="mt-1">
                   <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs">
@@ -377,17 +377,13 @@
 
           <template #cell-usage="{ row }">
             <div class="text-sm">
-              <div class="flex items-center gap-1.5">
-                <span class="text-gray-500 dark:text-gray-400">{{ t('keys.today') }}:</span>
-                <span class="font-medium text-gray-900 dark:text-white">
-                  ${{ (usageStats[row.id]?.today_actual_cost ?? 0).toFixed(4) }}
-                </span>
-              </div>
+                <div class="flex items-center gap-1.5">
+                  <span class="text-gray-500 dark:text-gray-400">{{ t('keys.today') }}:</span>
+                  <span class="font-medium text-gray-900 dark:text-white">${{ getTodayActualCost(row).toFixed(4) }}</span>
+                </div>
               <div class="mt-0.5 flex items-center gap-1.5">
                 <span class="text-gray-500 dark:text-gray-400">{{ t('keys.total') }}:</span>
-                <span class="font-medium text-gray-900 dark:text-white">
-                  ${{ (usageStats[row.id]?.total_actual_cost ?? 0).toFixed(4) }}
-                </span>
+                <span class="font-medium text-gray-900 dark:text-white">${{ getTotalActualCost(row).toFixed(4) }}</span>
               </div>
               <!-- Quota progress (if quota is set) -->
               <div v-if="row.quota > 0" class="mt-1.5">
@@ -1487,6 +1483,7 @@ const loadApiKeys = async () => {
   abortController = controller
   const { signal } = controller
   loading.value = true
+  usageStats.value = {}
   resetSelections()
   try {
     const response = await keysAPI.list(pagination.value.page, pagination.value.page_size, {}, {
@@ -1760,9 +1757,18 @@ const handleSubmit = async () => {
   const ipWhitelist = formData.value.enable_ip_restriction ? parseIPList(formData.value.ip_whitelist) : []
   const ipBlacklist = formData.value.enable_ip_restriction ? parseIPList(formData.value.ip_blacklist) : []
 
-  // "额度限制" now maps to the daily spending cap, so this dialog no longer writes cumulative quota.
-  const quota = 0
+  // Daily limit is always persisted; 5h/7d limits are controlled by the toggle.
+  const normalizeLimit = (value: number | null): number => {
+    return value != null && Number.isFinite(value) && value > 0 ? value : 0
+  }
 
+  // Keep legacy quota field aligned for backends that have not migrated to rate_limit_1d yet.
+  const rateLimitData = {
+    rate_limit_1d: normalizeLimit(formData.value.rate_limit_1d),
+    rate_limit_5h: formData.value.enable_rate_limit ? normalizeLimit(formData.value.rate_limit_5h) : 0,
+    rate_limit_7d: formData.value.enable_rate_limit ? normalizeLimit(formData.value.rate_limit_7d) : 0,
+  }
+  const quota = rateLimitData.rate_limit_1d
   // Calculate expiration
   let expiresInDays: number | undefined
   let expiresAt: string | null | undefined
@@ -1780,16 +1786,6 @@ const handleSubmit = async () => {
   } else if (showEditModal.value) {
     // Edit mode: if expiration disabled or date cleared, send empty string to clear
     expiresAt = ''
-  }
-
-  // Daily limit is always persisted; 5h/7d limits are controlled by the toggle.
-  const normalizeLimit = (value: number | null): number => {
-    return value != null && Number.isFinite(value) && value > 0 ? value : 0
-  }
-  const rateLimitData = {
-    rate_limit_1d: normalizeLimit(formData.value.rate_limit_1d),
-    rate_limit_5h: formData.value.enable_rate_limit ? normalizeLimit(formData.value.rate_limit_5h) : 0,
-    rate_limit_7d: formData.value.enable_rate_limit ? normalizeLimit(formData.value.rate_limit_7d) : 0,
   }
 
   submitting.value = true
@@ -1835,6 +1831,27 @@ const handleSubmit = async () => {
   } finally {
     submitting.value = false
   }
+}
+
+const normalizeNumber = (value: unknown): number => {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+const getTodayActualCost = (row: ApiKey): number => {
+  const fromStats = usageStats.value[row.id]?.today_actual_cost
+  if (fromStats != null) {
+    return normalizeNumber(fromStats)
+  }
+  return normalizeNumber(row.usage_1d)
+}
+
+const getTotalActualCost = (row: ApiKey): number => {
+  const fromStats = usageStats.value[row.id]?.total_actual_cost
+  if (fromStats != null) {
+    return normalizeNumber(fromStats)
+  }
+  return normalizeNumber(row.quota_used)
 }
 
 /**

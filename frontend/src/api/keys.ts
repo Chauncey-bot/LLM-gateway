@@ -80,13 +80,13 @@ export async function create(
   if (expiresInDays !== undefined && expiresInDays > 0) {
     payload.expires_in_days = expiresInDays
   }
-  if (rateLimitData?.rate_limit_5h && rateLimitData.rate_limit_5h > 0) {
+  if (rateLimitData?.rate_limit_5h !== undefined) {
     payload.rate_limit_5h = rateLimitData.rate_limit_5h
   }
-  if (rateLimitData?.rate_limit_1d && rateLimitData.rate_limit_1d > 0) {
+  if (rateLimitData?.rate_limit_1d !== undefined) {
     payload.rate_limit_1d = rateLimitData.rate_limit_1d
   }
-  if (rateLimitData?.rate_limit_7d && rateLimitData.rate_limit_7d > 0) {
+  if (rateLimitData?.rate_limit_7d !== undefined) {
     payload.rate_limit_7d = rateLimitData.rate_limit_7d
   }
 
