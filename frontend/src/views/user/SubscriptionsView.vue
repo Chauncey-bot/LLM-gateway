@@ -398,13 +398,13 @@ function getResetQuotaError(subscription: UserSubscription | null): string | nul
     return t('userSubscriptions.resetQuotaNoExpiry')
   }
 
-  const expiresAt = toLocalDateStart(new Date(subscription.expires_at))
+  const expiresAt = new Date(subscription.expires_at)
   if (isNaN(expiresAt.getTime())) {
     return t('userSubscriptions.resetQuotaInvalidExpiry')
   }
 
-  if (expiresAt.getTime() <= toLocalDateStart(new Date()).getTime()) {
-    return t('userSubscriptions.resetQuotaExpiredToday')
+  if (expiresAt.getTime() - Date.now() <= MS_PER_DAY) {
+    return t('userSubscriptions.resetQuotaExpiresSoon')
   }
 
   return null

@@ -5168,7 +5168,8 @@ export default {
     resetQuotaNotSupported: '该功能后端接口暂未开放，请联系管理员',
     resetQuotaNoExpiry: '当前套餐未设置到期时间，无法按扣除 1 天有效期处理',
     resetQuotaInvalidExpiry: '当前套餐到期时间格式无效',
-    resetQuotaExpiredToday: '套餐到期时间是今天或以前，无法执行重置'
+    resetQuotaExpiredToday: '套餐到期时间是今天或以前，无法执行重置',
+    resetQuotaExpiresSoon: '套餐有效期不足 24 小时，无法执行重置',
   },
 
   // Onboarding Tour

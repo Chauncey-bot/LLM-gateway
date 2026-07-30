@@ -5019,7 +5019,8 @@ export default {
     resetQuotaNotSupported: 'Quota reset API is not available in backend yet. Please contact admin.',
     resetQuotaNoExpiry: 'This subscription has no expiry date, so 1-day validity deduction cannot be applied',
     resetQuotaInvalidExpiry: 'This subscription expiration time is invalid',
-    resetQuotaExpiredToday: 'The subscription expires today or earlier and cannot be reset'
+    resetQuotaExpiredToday: 'The subscription expires today or earlier and cannot be reset',
+    resetQuotaExpiresSoon: 'The subscription has less than 24 hours remaining and cannot be reset'
   },
 
   // Onboarding Tour
