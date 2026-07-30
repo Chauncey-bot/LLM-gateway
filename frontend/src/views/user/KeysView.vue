@@ -16,6 +16,58 @@
       <TablePageLayout>
       <template #table>
         <div class="api-key-record-scroll">
+        <div class="api-key-batch-toolbar" v-if="apiKeys.length > 0 || loading">
+          <div class="api-key-batch-toolbar-inner">
+            <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                :checked="isAllSelected"
+                :indeterminate.prop="isPartiallySelected"
+                :disabled="applyingBatch"
+                @change="toggleSelectAll"
+                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span>{{ t('common.selectedCount', { count: selectedApiKeyCount }) }}</span>
+            </label>
+
+            <div class="api-key-batch-actions">
+              <span class="text-sm text-gray-500 dark:text-gray-400">{{ t('keys.batchSetGroup') }}:</span>
+              <select
+                v-model.number="batchTargetGroupId"
+                :disabled="selectedApiKeyCount === 0 || applyingBatch"
+                class="select input h-8 w-full rounded-md border border-gray-300 px-2 py-1 text-sm dark:border-dark-500 dark:bg-dark-700 dark:text-white"
+              >
+                <option :value="-1">{{ t('keys.batchTargetPlaceholder') }}</option>
+                <option :value="0">{{ t('common.none') }}</option>
+                <option v-for="group in groupOptions" :key="group.value" :value="group.value">
+                  {{ group.label }}
+                </option>
+              </select>
+
+              <button
+                @click="applyBatchGroup"
+                :disabled="!canApplyBatch"
+                class="btn btn-primary h-8 px-3 py-1 text-sm disabled:opacity-50"
+              >
+                <svg
+                  v-if="applyingBatch"
+                  class="-ml-1 mr-2 h-4 w-4 animate-spin text-white"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path
+                    class="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  />
+                </svg>
+                {{ applyingBatch ? t('common.saving') : t('keys.batchApply') }}
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div class="api-key-record-list">
           <template v-if="loading">
             <div
@@ -53,10 +105,19 @@
           >
             <div class="api-key-record-main">
               <div class="min-w-0">
-                <div class="mb-2 flex flex-wrap items-center gap-2">
-                  <h3 class="truncate text-base font-semibold text-gray-900 dark:text-white">
-                    {{ row.name }}
-                  </h3>
+              <div class="mb-2 flex flex-wrap items-center gap-2">
+                <label class="flex-shrink-0">
+                  <input
+                    type="checkbox"
+                    :checked="selectedApiKeyIds.has(row.id)"
+                    :disabled="applyingBatch"
+                    @change="setSelectedApiKey(row.id, ($event.target as HTMLInputElement).checked)"
+                    class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                </label>
+                <h3 class="truncate text-base font-semibold text-gray-900 dark:text-white">
+                  {{ row.name }}
+                </h3>
                   <Icon
                     v-if="row.ip_whitelist?.length > 0 || row.ip_blacklist?.length > 0"
                     name="shield"
@@ -1243,6 +1304,9 @@ const apiKeys = ref<ApiKey[]>([])
 const groups = ref<Group[]>([])
 const loading = ref(false)
 const submitting = ref(false)
+const applyingBatch = ref(false)
+const selectedApiKeyIds = ref<Set<number>>(new Set())
+const batchTargetGroupId = ref(-1)
 const now = ref(new Date())
 let resetTimer: ReturnType<typeof setInterval> | null = null
 const usageStats = ref<Record<string, BatchApiKeyUsageStats>>({})
@@ -1272,6 +1336,17 @@ const dropdownRef = ref<HTMLElement | null>(null)
 const dropdownPosition = ref<{ top?: number; bottom?: number; left: number } | null>(null)
 const groupButtonRefs = ref<Map<number, HTMLElement>>(new Map())
 let abortController: AbortController | null = null
+
+const selectedApiKeyCount = computed(() => selectedApiKeyIds.value.size)
+const isAllSelected = computed(
+  () => apiKeys.value.length > 0 && selectedApiKeyCount.value === apiKeys.value.length
+)
+const isPartiallySelected = computed(
+  () => selectedApiKeyCount.value > 0 && !isAllSelected.value
+)
+const canApplyBatch = computed(
+  () => selectedApiKeyCount.value > 0 && batchTargetGroupId.value >= 0 && !applyingBatch.value
+)
 
 // Get the currently selected key for group change
 const selectedKeyForGroup = computed(() => {
@@ -1379,12 +1454,40 @@ const isAbortError = (error: unknown) => {
   return name === 'AbortError' || code === 'ERR_CANCELED'
 }
 
+const resetSelections = () => {
+  selectedApiKeyIds.value = new Set()
+  batchTargetGroupId.value = -1
+}
+
+const normalizeBatchTargetGroupId = (groupId: number): number | null => {
+  return groupId === 0 ? null : groupId
+}
+
+const setSelectedApiKey = (id: number, selected: boolean) => {
+  const next = new Set(selectedApiKeyIds.value)
+  if (selected) {
+    next.add(id)
+  } else {
+    next.delete(id)
+  }
+  selectedApiKeyIds.value = next
+}
+
+const toggleSelectAll = () => {
+  if (isAllSelected.value) {
+    selectedApiKeyIds.value = new Set()
+  } else {
+    selectedApiKeyIds.value = new Set(apiKeys.value.map((k) => k.id))
+  }
+}
+
 const loadApiKeys = async () => {
   abortController?.abort()
   const controller = new AbortController()
   abortController = controller
   const { signal } = controller
   loading.value = true
+  resetSelections()
   try {
     const response = await keysAPI.list(pagination.value.page, pagination.value.page_size, {}, {
       signal
@@ -1568,6 +1671,58 @@ const closeGroupSelector = (event: MouseEvent) => {
   if (!target.closest('.group\\/dropdown') && !dropdownRef.value?.contains(target)) {
     groupSelectorKeyId.value = null
     dropdownPosition.value = null
+  }
+}
+
+const applyBatchGroup = async () => {
+  if (selectedApiKeyCount.value === 0) {
+    appStore.showError(t('keys.batchNoSelection'))
+    return
+  }
+
+  if (batchTargetGroupId.value < 0) {
+    appStore.showError(t('keys.batchNoTarget'))
+    return
+  }
+
+  applyingBatch.value = true
+  groupSelectorKeyId.value = null
+  dropdownPosition.value = null
+
+  try {
+    const targetGroupId = normalizeBatchTargetGroupId(batchTargetGroupId.value)
+    const keyIds = Array.from(selectedApiKeyIds.value)
+    const results = await Promise.allSettled(
+      keyIds.map((keyId) => keysAPI.update(keyId, { group_id: targetGroupId }))
+    )
+
+    let success = 0
+    let failed = 0
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        success++
+      } else {
+        failed++
+      }
+    }
+
+    await loadApiKeys()
+
+    if (failed > 0) {
+      if (success > 0) {
+        appStore.showInfo(t('keys.batchGroupPartial', { success, failed }))
+      } else {
+        appStore.showError(t('keys.batchGroupFailed'))
+      }
+    } else {
+      appStore.showSuccess(t('keys.batchGroupSuccess', { count: success }))
+    }
+
+    batchTargetGroupId.value = -1
+  } catch (error: any) {
+    appStore.showError(error?.message || t('keys.batchGroupFailed'))
+  } finally {
+    applyingBatch.value = false
   }
 }
 
@@ -2006,6 +2161,18 @@ onUnmounted(() => {
 
 .api-key-record-list {
   @apply grid gap-4 xl:grid-cols-2;
+}
+
+.api-key-batch-toolbar {
+  @apply mb-4 rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-dark-700 dark:bg-dark-900;
+}
+
+.api-key-batch-toolbar-inner {
+  @apply flex flex-wrap items-center gap-2;
+}
+
+.api-key-batch-actions {
+  @apply ml-auto flex flex-wrap items-center gap-2;
 }
 
 .api-key-empty-state {

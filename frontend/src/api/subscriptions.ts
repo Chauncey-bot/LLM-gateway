@@ -23,6 +23,12 @@ export interface SubscriptionSummary {
   }>
 }
 
+export interface SubscriptionResetRequest {
+  daily: boolean
+  weekly?: boolean
+  monthly?: boolean
+}
+
 /**
  * Get list of current user's subscriptions
  */
@@ -67,10 +73,25 @@ export async function getSubscriptionProgress(
   return response.data
 }
 
+/**
+ * Reset quota usage for a subscription
+ */
+export async function resetQuota(
+  subscriptionId: number,
+  request: SubscriptionResetRequest = { daily: true }
+): Promise<UserSubscription> {
+  const { data } = await apiClient.post<UserSubscription>(
+    `/subscriptions/${subscriptionId}/reset-quota`,
+    request
+  )
+  return data
+}
+
 export default {
   getMySubscriptions,
   getActiveSubscriptions,
   getSubscriptionsProgress,
   getSubscriptionSummary,
-  getSubscriptionProgress
+  getSubscriptionProgress,
+  resetQuota
 }

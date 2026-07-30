@@ -651,6 +651,14 @@ export default {
     noGroup: '无分组',
     searchGroup: '搜索分组...',
     noGroupFound: '未找到匹配的分组',
+    batchSetGroup: '批量设置分组',
+    batchTargetPlaceholder: '选择目标分组',
+    batchApply: '应用到已选',
+    batchNoSelection: '请先选择要修改的 Key',
+    batchNoTarget: '请选择目标分组',
+    batchGroupSuccess: '成功更新 {count} 个 Key 的分组',
+    batchGroupPartial: '批量更新完成：{success} 个成功，{failed} 个失败',
+    batchGroupFailed: '批量更新分组失败',
     created: '创建时间',
     copyToClipboard: '复制到剪贴板',
     copied: '已复制！',
@@ -5149,7 +5157,18 @@ export default {
     expiresOn: '{date} 到期',
     resetIn: '{time} 后重置',
     windowNotActive: '等待首次使用',
-    usageOf: '已用 {used} / {limit}'
+    usageOf: '已用 {used} / {limit}',
+    resetQuota: '重置今日额度',
+    resetQuotaTitle: '重置今日额度',
+    resetQuotaConfirm:
+      '将扣除 1 天有效期，并重置「{name}」今日已使用额度。确定要继续吗？',
+    resetQuotaConfirmAction: '确定重置',
+    resetQuotaSuccess: '今日额度重置成功，已扣除 1 天有效期',
+    resetQuotaFailed: '额度重置失败',
+    resetQuotaNotSupported: '该功能后端接口暂未开放，请联系管理员',
+    resetQuotaNoExpiry: '当前套餐未设置到期时间，无法按扣除 1 天有效期处理',
+    resetQuotaInvalidExpiry: '当前套餐到期时间格式无效',
+    resetQuotaExpiredToday: '套餐到期时间是今天或以前，无法执行重置'
   },
 
   // Onboarding Tour

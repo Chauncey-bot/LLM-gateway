@@ -10,6 +10,26 @@
       "validity_days": 30
     },
     {
+      "code": "coding-plan-daily-100",
+      "enabled": false,
+      "title": "OpenAI 100 Daily Temp Top-up",
+      "description": "10 RMB temporary refill for one day, 100 USD daily limit.",
+      "amount_cents": 1000,
+      "group_id": 23,
+      "validity_days": 1,
+      "topup_balance_amount": 100
+    },
+    {
+      "code": "coding-plan-daily-100-v2",
+      "enabled": true,
+      "title": "OpenAI 100 Daily Temp Top-up (v2)",
+      "description": "10 RMB temporary refill for one day, 100 USD daily limit.",
+      "amount_cents": 1000,
+      "group_id": 10,
+      "validity_days": 1,
+      "topup_balance_amount": 100
+    },
+    {
       "code": "coding-plan-daily-200",
       "enabled": true,
       "title": "OpenAI 200 Daily Monthly",
@@ -70,6 +90,15 @@
       "description": "750 RMB per month, 300 USD daily limit.",
       "amount_cents": 75000,
       "group_id": 21,
+      "validity_days": 30
+    },
+    {
+      "code": "coding-plan-daily-2800",
+      "enabled": true,
+      "title": "Coding Plan 2800 Daily",
+      "description": "7000 RMB per month, 2800 USD daily limit.",
+      "amount_cents": 700000,
+      "group_id": 22,
       "validity_days": 30
     },
     {

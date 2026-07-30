@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildOrderFulfillmentRequest, buildSubscriptionFulfillmentRequest } from "../subscription-fulfillment.mjs";
+import {
+  buildOrderFulfillmentRequest,
+  buildOrderFulfillmentRequests,
+  buildSubscriptionFulfillmentRequest,
+} from "../subscription-fulfillment.mjs";
 
 test("uses extend when a matching subscription already exists", () => {
   const order = {
@@ -121,4 +125,61 @@ test("builds a balance top-up fulfillment request", () => {
       notes: "payment:ZSALI202605230004",
     },
   });
+});
+
+test("builds a top-up balance fulfillment request for a designated subscription sku", () => {
+  const order = {
+    merchant_order_id: "ZSALI202605230006",
+    sku_type: "subscription",
+    user_id: 123,
+    group_id: 5,
+    validity_days: 1,
+    balance_amount: 100,
+  };
+
+  const result = buildOrderFulfillmentRequest(order, []);
+
+  assert.deepEqual(result, {
+    skuType: "balance",
+    operation: "add",
+    path: "/api/v1/admin/users/123/balance",
+    body: {
+      balance: 100,
+      operation: "add",
+      notes: "payment:ZSALI202605230006",
+    },
+  });
+});
+
+test("builds a balance top-up and subscription request for a designated subscription sku", () => {
+  const order = {
+    merchant_order_id: "ZSALI202605230007",
+    sku_type: "subscription",
+    user_id: 123,
+    group_id: 5,
+    validity_days: 1,
+    balance_amount: 100,
+  };
+  const subscriptions = [{ id: 9988, group_id: 5, status: "active", expires_at: "2026-06-01T00:00:00Z" }];
+
+  const result = buildOrderFulfillmentRequests(order, subscriptions);
+
+  assert.deepEqual(result, [
+    {
+      skuType: "balance",
+      operation: "add",
+      path: "/api/v1/admin/users/123/balance",
+      body: {
+        balance: 100,
+        operation: "add",
+        notes: "payment:ZSALI202605230007",
+      },
+    },
+    {
+      skuType: "subscription",
+      operation: "extend",
+      path: "/api/v1/admin/subscriptions/9988/extend",
+      body: { days: 1 },
+    },
+  ]);
 });

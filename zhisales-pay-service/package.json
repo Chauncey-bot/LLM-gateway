@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "reconcile:daily100": "node ./scripts/reconcile-daily100-subscription-assign.mjs",
+    "reconcile:user-subscription": "node ./scripts/reconcile-user-subscription-orders.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

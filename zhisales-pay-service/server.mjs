@@ -42,6 +42,11 @@ const adminSession = {
   token: null,
   expiresAt: 0,
 };
+const skuGroupCache = {
+  value: new Map(),
+  expiresAt: 0,
+};
+const skuGroupCacheTtlMs = 30_000;
 
 const HIDDEN_SKU_CODES = new Set([
   "coding-plan-daily-1200",
@@ -139,6 +144,11 @@ function amountToCents(value) {
     return null;
   }
   return Math.round(numeric * 100);
+}
+
+function parseOptionalNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function normalizeTradingStatus(status) {
@@ -247,6 +257,29 @@ async function getEnabledCatalog() {
     }),
     balancePacks: catalog.balancePacks.filter((item) => item.enabled && Number(item.amount_cents) > 0),
   };
+}
+
+async function getSkuToGroupIdMap() {
+  const now = Date.now();
+  if (skuGroupCache.expiresAt > now) {
+    return skuGroupCache.value;
+  }
+
+  const catalog = await readCatalog();
+  const map = new Map();
+  for (const item of catalog.subscriptions) {
+    if (!item || !item.code) {
+      continue;
+    }
+    const groupId = Number(item.group_id);
+    if (Number.isFinite(groupId)) {
+      map.set(item.code, groupId);
+    }
+  }
+
+  skuGroupCache.value = map;
+  skuGroupCache.expiresAt = now + skuGroupCacheTtlMs;
+  return map;
 }
 
 async function initDb() {
@@ -699,6 +732,37 @@ function normalizeOrderRow(row) {
 
 function normalizeOrderListResponse(rows) {
   return rows.map((row) => normalizeOrderRow(row));
+}
+
+function buildOrderConsistencyInfo(row, skuToGroupMap) {
+  if (row.sku_type !== "subscription") {
+    return {
+      expectedGroupId: null,
+      expectedGroupConfigFound: false,
+      groupIdMismatch: false,
+    };
+  }
+
+  const expectedGroupId = skuToGroupMap?.has(row.sku_code) ? Number(skuToGroupMap.get(row.sku_code)) : null;
+  const expectedGroupConfigFound = expectedGroupId !== null;
+  const actualGroupId = row.group_id === null ? null : Number(row.group_id);
+  const groupIdMismatch =
+    expectedGroupConfigFound &&
+    (actualGroupId === null || !Number.isFinite(actualGroupId) || actualGroupId !== expectedGroupId);
+
+  return {
+    expectedGroupId,
+    expectedGroupConfigFound,
+    groupIdMismatch,
+  };
+}
+
+async function normalizeAdminOrderListResponse(rows) {
+  const skuToGroupMap = await getSkuToGroupIdMap();
+  return rows.map((row) => ({
+    ...normalizeOrderRow(row),
+    ...buildOrderConsistencyInfo(row, skuToGroupMap),
+  }));
 }
 
 function parseListLimit(value, fallback = 100, max = 200) {
@@ -1169,7 +1233,10 @@ app.post("/pay-api/orders", async (req, res) => {
       skuCode: sku.code,
       groupId: sku.type === "subscription" ? Number(sku.group_id) : null,
       validityDays: sku.type === "subscription" ? Number(sku.validity_days || 30) : null,
-      balanceAmount: sku.type === "balance" ? Number(sku.balance_amount) : null,
+      balanceAmount:
+        sku.type === "balance"
+          ? parseOptionalNumber(sku.balance_amount)
+          : parseOptionalNumber(sku.topup_balance_amount),
       amountCents: Number(sku.amount_cents),
       clientIp: req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() || req.socket.remoteAddress || "",
     };
@@ -1317,9 +1384,16 @@ app.get("/pay-api/admin/orders", async (req, res) => {
       `,
       filters.params,
     );
+    const orders = await normalizeAdminOrderListResponse(rows);
+    const mismatchedOrders = orders.filter((order) => order.groupIdMismatch);
     res.setHeader("Cache-Control", "no-store");
     res.json({
-      orders: normalizeOrderListResponse(rows),
+      orders,
+      consistency: {
+        mismatchRate: rows.length ? mismatchedOrders.length / rows.length : 0,
+        mismatchedCount: mismatchedOrders.length,
+        scanned: rows.length,
+      },
       querySupported: isQueryConfigured(),
       page,
       pageSize,
@@ -1332,6 +1406,71 @@ app.get("/pay-api/admin/orders", async (req, res) => {
     });
   } catch (error) {
     const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed to list orders";
+    jsonError(res, message === "Forbidden" ? 403 : 500, message);
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/pay-api/admin/orders/consistency-check", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await requireCurrentAdmin(req);
+    const pageSize = parseListLimit(req.query.pageSize ?? req.query.limit, 100, 500);
+    const page = parsePositiveInt(req.query.page, 1);
+    const offset = (page - 1) * pageSize;
+    const mismatchOnly = String(req.query.mismatchOnly || "true").toLowerCase() !== "false";
+    const filters = buildOrderListFilters(req.query, false, true);
+
+    const baseWhere = filters.whereSql ? filters.whereSql.replace(/^WHERE\s+/i, "") : "";
+    const whereSql = baseWhere
+      ? `WHERE sku_type = 'subscription' AND ${baseWhere}`
+      : `WHERE sku_type = 'subscription'`;
+
+    const countQuery = await client.query(
+      `
+      SELECT COUNT(*)::bigint AS total
+      FROM payment_orders
+      ${whereSql}
+      `,
+      [...filters.params],
+    );
+    const total = Number(countQuery.rows[0]?.total || 0);
+    filters.params.push(pageSize, offset);
+    const { rows } = await client.query(
+      `
+      SELECT *
+      FROM payment_orders
+      ${whereSql}
+      ORDER BY created_at DESC
+      LIMIT $${filters.params.length - 1} OFFSET $${filters.params.length}
+      `,
+      filters.params,
+    );
+
+    const scannedOrders = await normalizeAdminOrderListResponse(rows);
+    const mismatchedOrders = scannedOrders.filter((order) => order.groupIdMismatch);
+    const responseOrders = mismatchOnly ? mismatchedOrders : scannedOrders;
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      orders: responseOrders,
+      querySupported: isQueryConfigured(),
+      page,
+      pageSize,
+      offset,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      tradeStatus: filters.tradeStatus || "all",
+      fulfillmentStatus: filters.fulfillmentStatus || "all",
+      keyword: filters.keyword,
+      consistency: {
+        scanned: rows.length,
+        mismatchedCount: mismatchedOrders.length,
+        mismatchOnly,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed consistency check";
     jsonError(res, message === "Forbidden" ? 403 : 500, message);
   } finally {
     client.release();
@@ -1393,6 +1532,88 @@ app.post("/pay-api/admin/orders/:merchantOrderId/status", async (req, res) => {
       await client.query("ROLLBACK");
     } catch {}
     const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed to update order status";
+    jsonError(res, message === "Forbidden" ? 403 : 500, message);
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/pay-api/admin/orders/:merchantOrderId/fulfill", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await requireCurrentAdmin(req);
+
+    await client.query("BEGIN");
+    const select = await client.query(
+      "SELECT * FROM payment_orders WHERE merchant_order_id = $1 FOR UPDATE",
+      [req.params.merchantOrderId],
+    );
+    if (!select.rows.length) {
+      await client.query("ROLLBACK");
+      return jsonError(res, 404, "Order not found");
+    }
+
+    let order = select.rows[0];
+    if (order.trade_status !== "paid" && isQueryConfigured()) {
+      const queryResult = await queryTrade(order);
+      if (queryResult.normalizedStatus) {
+        const update = await client.query(
+          `
+          UPDATE payment_orders
+          SET trade_status = $2,
+              platform_order_no = COALESCE($3, platform_order_no),
+              raw_query_response = $4,
+              last_checked_at = NOW(),
+              updated_at = NOW()
+          WHERE merchant_order_id = $1
+          RETURNING *
+          `,
+          [
+            order.merchant_order_id,
+            queryResult.normalizedStatus,
+            queryResult.platformOrderNo || null,
+            JSON.stringify(queryResult.raw || null),
+          ],
+        );
+        order = update.rows[0];
+      }
+    }
+
+    if (order.fulfillment_status === "fulfilled") {
+      await client.query("COMMIT");
+      return res.json({
+        ok: true,
+        retried: false,
+        order: normalizeOrderRow(order),
+        paymentStatus: formatPaymentStatusLabel(order.trade_status),
+        fulfillmentStatus: formatFulfillmentStatusLabel(order.fulfillment_status),
+        message: "Order has already been fulfilled",
+      });
+    }
+
+    if (order.trade_status !== "paid") {
+      await client.query("ROLLBACK");
+      return jsonError(
+        res,
+        400,
+        `Order payment status is ${formatPaymentStatusLabel(order.trade_status)} and cannot be fulfilled yet`,
+      );
+    }
+
+    order = await fulfillOrder(order, client);
+    await client.query("COMMIT");
+    res.json({
+      ok: true,
+      retried: true,
+      order: normalizeOrderRow(order),
+      paymentStatus: formatPaymentStatusLabel(order.trade_status),
+      fulfillmentStatus: formatFulfillmentStatusLabel(order.fulfillment_status),
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed to fulfill order";
     jsonError(res, message === "Forbidden" ? 403 : 500, message);
   } finally {
     client.release();

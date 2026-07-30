@@ -77,6 +77,78 @@ test("retries subscription fulfillment after a 409 by refreshing subscriptions",
   });
 });
 
+test("retries only subscription fulfillment after a 409 while keeping prior top-up actions", async () => {
+  const order = {
+    merchant_order_id: "ZSALI202605260003",
+    sku_type: "subscription",
+    user_id: 123,
+    group_id: 10,
+    validity_days: 30,
+    balance_amount: 100,
+  };
+
+  const submitCalls = [];
+  const conflict = new Error("sub2api request failed (409): subscription exists but request conflicts with existing assignment semantics");
+  let subscriptionSubmitCount = 0;
+
+  const result = await fulfillSubscriptionWithRetry(order, {
+    listSubscriptions: async (userId) => {
+      if (userId !== 123) {
+        throw new Error("unexpected user id");
+      }
+      return [];
+    },
+    submitFulfillment: async (fulfillment) => {
+      submitCalls.push(fulfillment);
+      if (fulfillment.skuType === "balance") {
+        return { ok: true };
+      }
+
+      subscriptionSubmitCount += 1;
+      if (subscriptionSubmitCount === 1) {
+        throw conflict;
+      }
+
+      return { ok: true };
+    },
+  });
+
+  assert.equal(submitCalls.length, 3);
+  assert.deepEqual(submitCalls[0], {
+    skuType: "balance",
+    operation: "add",
+    path: "/api/v1/admin/users/123/balance",
+    body: {
+      balance: 100,
+      operation: "add",
+      notes: "payment:ZSALI202605260003",
+    },
+  });
+  assert.deepEqual(submitCalls[1], {
+    skuType: "subscription",
+    operation: "assign",
+    path: "/api/v1/admin/subscriptions/assign",
+    body: {
+      user_id: 123,
+      group_id: 10,
+      validity_days: 30,
+      notes: "payment:ZSALI202605260003",
+    },
+  });
+  assert.deepEqual(submitCalls[2], {
+    skuType: "subscription",
+    operation: "assign",
+    path: "/api/v1/admin/subscriptions/assign",
+    body: {
+      user_id: 123,
+      group_id: 10,
+      validity_days: 30,
+      notes: "payment:ZSALI202605260003",
+    },
+  });
+  assert.equal(result.skuType, "subscription");
+});
+
 test("does not swallow non-conflict errors", async () => {
   const order = {
     merchant_order_id: "ZSALI202605260002",

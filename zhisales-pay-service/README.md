@@ -39,6 +39,35 @@ Order status payloads exposed by `/pay-api/orders/:merchantOrderId`,
 - payment status: `paid` / `pending` / `closed` / `failed` / `refunded`
 - fulfillment status: `pending` / `fulfilled` / `fulfillment_failed`
 
+### Admin manual fulfillment endpoint
+
+If an order is marked `trade_status=paid` but `fulfillment_status!=fulfilled`,
+you can force a manual retry from admin credentials:
+
+- `POST /pay-api/admin/orders/{merchantOrderId}/fulfill`
+- Response:
+  - `{ ok: true, retried: boolean, order: { ... } }`
+- Behavior:
+  - Re-checks payment status via query API when needed
+  - Calls the same fulfillment flow used by notify/poller
+  - Keeps idempotency when order is already fulfilled
+
+### Reconcile paid subscription orders for a specific user
+
+Run a targeted script after deploying the new admin fulfill endpoint:
+
+```bash
+cd zhisales-pay-service
+SUB2API_ADMIN_EMAIL=admin@example.com \
+SUB2API_ADMIN_PASSWORD='your-password' \
+TARGET_USER_EMAIL='user@example.com' \
+PAY_SERVICE_BASE_URL='https://www.zhisales.com' \
+npm run reconcile:user-subscription
+```
+
+The script checks paid orders for that email, calls `/pay-api/admin/orders/{merchantOrderId}/fulfill`
+for non-fulfilled subscription orders, and prints a JSON summary.
+
 ## Referral rewards callback
 
 If both of the following env vars are configured, the payment service will notify the

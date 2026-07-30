@@ -7,11 +7,69 @@
         </div>
         <div><p class="font-medium text-gray-900 dark:text-white">{{ user.email }}</p><p class="text-sm text-gray-500 dark:text-dark-400">{{ user.username }}</p></div>
       </div>
+
       <div v-if="loading" class="flex justify-center py-8"><svg class="h-8 w-8 animate-spin text-primary-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></div>
+
       <div v-else-if="apiKeys.length === 0" class="py-8 text-center"><p class="text-sm text-gray-500">{{ t('admin.users.noApiKeys') }}</p></div>
+
       <div v-else ref="scrollContainerRef" class="max-h-96 space-y-3 overflow-y-auto" @scroll="closeGroupSelector">
-        <div v-for="key in apiKeys" :key="key.id" class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-600 dark:bg-dark-800">
-          <div class="flex items-start justify-between">
+        <div class="space-y-3 rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-600 dark:bg-dark-800">
+          <div class="flex flex-wrap items-center gap-3">
+            <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                :checked="isAllSelected"
+                :indeterminate.prop="isPartiallySelected"
+                @change="toggleSelectAll"
+                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span>{{ t('common.selectedCount', { count: selectedApiKeyCount }) }}</span>
+            </label>
+
+            <div class="flex flex-1 items-center gap-2">
+              <span class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.users.batchSetGroup') }}:</span>
+              <select
+                v-model.number="batchTargetGroupId"
+                :disabled="selectedApiKeyCount === 0 || applyingBatch"
+                class="select input h-8 w-full max-w-64 rounded-md border border-gray-300 px-2 py-1 text-sm dark:border-dark-500 dark:bg-dark-700 dark:text-white"
+              >
+                <option :value="-1">{{ t('admin.users.batchTargetPlaceholder') }}</option>
+                <option :value="0">{{ t('admin.users.none') }}</option>
+                <option v-for="group in allGroups" :key="group.id" :value="group.id">
+                  {{ group.name }}
+                </option>
+              </select>
+            </div>
+
+            <button
+              @click="applyBatchGroup"
+              :disabled="!canApplyBatch"
+              class="btn btn-primary h-8 px-3 py-1 text-sm disabled:opacity-50"
+            >
+              <svg v-if="applyingBatch" class="-ml-1 mr-2 h-4 w-4 animate-spin text-white" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              {{ applyingBatch ? t('common.saving') : t('admin.users.batchApply') }}
+            </button>
+          </div>
+        </div>
+
+        <div
+          v-for="key in apiKeys"
+          :key="key.id"
+          class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-600 dark:bg-dark-800"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <label class="mt-1">
+              <input
+                type="checkbox"
+                :checked="selectedApiKeyIds.has(key.id)"
+                :disabled="updatingKeyIds.has(key.id) || applyingBatch"
+                @change="setSelectedApiKey(key.id, ($event.target as HTMLInputElement).checked)"
+                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+            </label>
             <div class="min-w-0 flex-1">
               <div class="mb-1 flex items-center gap-2"><span class="font-medium text-gray-900 dark:text-white">{{ key.name }}</span><span :class="['badge text-xs', key.status === 'active' ? 'badge-success' : 'badge-danger']">{{ key.status }}</span></div>
               <p class="truncate font-mono text-sm text-gray-500">{{ key.key.substring(0, 20) }}...{{ key.key.substring(key.key.length - 8) }}</p>
@@ -116,12 +174,26 @@ const appStore = useAppStore()
 const apiKeys = ref<ApiKey[]>([])
 const allGroups = ref<AdminGroup[]>([])
 const loading = ref(false)
+const applyingBatch = ref(false)
 const updatingKeyIds = ref(new Set<number>())
+const selectedApiKeyIds = ref(new Set<number>())
+const batchTargetGroupId = ref(-1)
 const groupSelectorKeyId = ref<number | null>(null)
 const dropdownPosition = ref<{ top: number; left: number } | null>(null)
 const dropdownRef = ref<HTMLElement | null>(null)
 const scrollContainerRef = ref<HTMLElement | null>(null)
 const groupButtonRefs = ref<Map<number, HTMLElement>>(new Map())
+
+const selectedApiKeyCount = computed(() => selectedApiKeyIds.value.size)
+const isAllSelected = computed(
+  () => apiKeys.value.length > 0 && selectedApiKeyCount.value === apiKeys.value.length
+)
+const isPartiallySelected = computed(
+  () => selectedApiKeyCount.value > 0 && !isAllSelected.value
+)
+const canApplyBatch = computed(
+  () => selectedApiKeyCount.value > 0 && batchTargetGroupId.value >= 0 && !applyingBatch.value
+)
 
 const selectedKeyForGroup = computed(() => {
   if (groupSelectorKeyId.value === null) return null
@@ -136,18 +208,46 @@ const setGroupButtonRef = (keyId: number, el: Element | ComponentPublicInstance 
   }
 }
 
+const resetSelections = () => {
+  selectedApiKeyIds.value = new Set()
+  batchTargetGroupId.value = -1
+}
+
+const normalizeBatchTargetGroupId = () => (batchTargetGroupId.value === 0 ? null : batchTargetGroupId.value)
+
+const setSelectedApiKey = (id: number, selected: boolean) => {
+  const next = new Set(selectedApiKeyIds.value)
+  if (selected) {
+    next.add(id)
+  } else {
+    next.delete(id)
+  }
+  selectedApiKeyIds.value = next
+}
+
+const toggleSelectAll = () => {
+  if (isAllSelected.value) {
+    selectedApiKeyIds.value = new Set()
+  } else {
+    selectedApiKeyIds.value = new Set(apiKeys.value.map((k) => k.id))
+  }
+}
+
 watch(() => props.show, (v) => {
   if (v && props.user) {
     load()
     loadGroups()
   } else {
     closeGroupSelector()
+    resetSelections()
   }
 })
 
 const load = async () => {
   if (!props.user) return
   loading.value = true
+  closeGroupSelector()
+  resetSelections()
   groupButtonRefs.value.clear()
   try {
     const res = await adminAPI.users.getUserApiKeys(props.user.id)
@@ -192,6 +292,44 @@ const openGroupSelector = (key: ApiKey) => {
 const closeGroupSelector = () => {
   groupSelectorKeyId.value = null
   dropdownPosition.value = null
+}
+
+const applyBatchGroup = async () => {
+  if (selectedApiKeyCount.value === 0) {
+    appStore.showError(t('admin.users.batchNoSelection'))
+    return
+  }
+  if (batchTargetGroupId.value < 0) {
+    appStore.showError(t('admin.users.batchNoTarget'))
+    return
+  }
+
+  if (!props.user) return
+  applyingBatch.value = true
+  closeGroupSelector()
+
+  try {
+    const targetGroupId = normalizeBatchTargetGroupId()
+    const result = await adminAPI.apiKeys.batchUpdateApiKeyGroup(Array.from(selectedApiKeyIds.value), targetGroupId)
+
+    await load()
+
+    if (result.failed_count > 0) {
+      if (result.updated_count > 0) {
+        appStore.showInfo(t('admin.users.batchGroupPartial', { success: result.updated_count, failed: result.failed_count }))
+      } else {
+        appStore.showError(t('admin.users.batchGroupFailed'))
+      }
+    } else {
+      appStore.showSuccess(t('admin.users.batchGroupSuccess', { count: result.updated_count }))
+    }
+
+    batchTargetGroupId.value = -1
+  } catch (error: any) {
+    appStore.showError(error?.message || t('admin.users.batchGroupFailed'))
+  } finally {
+    applyingBatch.value = false
+  }
 }
 
 const changeGroup = async (key: ApiKey, newGroupId: number | null) => {

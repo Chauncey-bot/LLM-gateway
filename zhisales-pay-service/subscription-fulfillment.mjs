@@ -28,6 +28,64 @@ export function pickMatchingSubscription(subscriptions, groupId) {
     })[0];
 }
 
+function resolveTopUpBalanceAmount(order) {
+  if (order.sku_type !== "subscription") {
+    return null;
+  }
+
+  const balanceAmount = Number(order.balance_amount);
+  if (!Number.isFinite(balanceAmount) || balanceAmount <= 0) {
+    return null;
+  }
+
+  return balanceAmount;
+}
+
+export function buildOrderFulfillmentRequests(order, subscriptions = []) {
+  const fulfillments = [];
+  const topUpBalanceAmount = resolveTopUpBalanceAmount(order);
+
+  if (topUpBalanceAmount !== null) {
+    fulfillments.push({
+      skuType: "balance",
+      operation: "add",
+      path: `/api/v1/admin/users/${order.user_id}/balance`,
+      body: {
+        balance: topUpBalanceAmount,
+        operation: "add",
+        notes: `payment:${order.merchant_order_id}`,
+      },
+    });
+  }
+
+  if (order.sku_type === "subscription") {
+    fulfillments.push({
+      skuType: "subscription",
+      ...buildSubscriptionFulfillmentRequest(order, subscriptions),
+    });
+    return fulfillments;
+  }
+
+  if (order.sku_type === "balance") {
+    fulfillments.push({
+      skuType: "balance",
+      operation: "add",
+      path: `/api/v1/admin/users/${order.user_id}/balance`,
+      body: {
+        balance: Number(order.balance_amount),
+        operation: "add",
+        notes: `payment:${order.merchant_order_id}`,
+      },
+    });
+  }
+
+  if (fulfillments.length === 0) {
+    throw new Error(`Unsupported sku_type: ${order.sku_type}`);
+  }
+
+  return fulfillments;
+}
+
 export function isSubscriptionConflictError(error) {
   const message = typeof error === "string" ? error : error instanceof Error ? error.message : String(error || "");
   return message.includes("(409)") || /conflicts with existing assignment semantics/i.test(message);
@@ -56,25 +114,6 @@ export function buildSubscriptionFulfillmentRequest(order, subscriptions) {
 }
 
 export function buildOrderFulfillmentRequest(order, subscriptions = []) {
-  if (order.sku_type === "subscription") {
-    return {
-      skuType: "subscription",
-      ...buildSubscriptionFulfillmentRequest(order, subscriptions),
-    };
-  }
-
-  if (order.sku_type === "balance") {
-    return {
-      skuType: "balance",
-      operation: "add",
-      path: `/api/v1/admin/users/${order.user_id}/balance`,
-      body: {
-        balance: Number(order.balance_amount),
-        operation: "add",
-        notes: `payment:${order.merchant_order_id}`,
-      },
-    };
-  }
-
-  throw new Error(`Unsupported sku_type: ${order.sku_type}`);
+  const fulfillments = buildOrderFulfillmentRequests(order, subscriptions);
+  return fulfillments[0];
 }

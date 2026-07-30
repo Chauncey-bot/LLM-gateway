@@ -233,20 +233,46 @@
                 </div>
               </div>
             </div>
+
+            <div class="border-t border-gray-200 pt-3 dark:border-dark-700">
+              <button
+                type="button"
+                class="btn btn-warning btn-sm w-full"
+                :disabled="isResettingQuota"
+                @click="openResetQuotaDialog(subscription)"
+              >
+                <Icon name="refresh" size="xs" class="mr-1.5" />
+                {{ t('userSubscriptions.resetQuota') }}
+              </button>
+            </div>
           </div>
         </div>
       </div>
+
+              <ConfirmDialog
+                :show="showResetQuotaDialog"
+                :title="t('userSubscriptions.resetQuotaTitle')"
+                :message="t('userSubscriptions.resetQuotaConfirm', {
+                  name: resettingSubscription?.group?.name || `Group #${resettingSubscription?.group_id || ''}`
+                })"
+                :confirm-text="t('userSubscriptions.resetQuotaConfirmAction')"
+                :cancel-text="t('common.cancel')"
+                :danger="true"
+                @confirm="confirmResetQuota"
+                @cancel="closeResetQuotaDialog"
+              />
     </div>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import subscriptionsAPI from '@/api/subscriptions'
 import type { UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { formatDateTime } from '@/utils/format'
 
@@ -255,6 +281,9 @@ const appStore = useAppStore()
 
 const subscriptions = ref<UserSubscription[]>([])
 const loading = ref(true)
+const showResetQuotaDialog = ref(false)
+const isResettingQuota = ref(false)
+const resettingSubscription = ref<UserSubscription | null>(null)
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 function toLocalDateStart(date: Date): Date {
@@ -360,6 +389,70 @@ function formatResetTime(windowStart: string | null, windowHours: number): strin
   }
 
   return `${minutes}m`
+}
+
+function getResetQuotaError(subscription: UserSubscription | null): string | null {
+  if (!subscription) return t('userSubscriptions.resetQuotaFailed')
+
+  if (!subscription.expires_at) {
+    return t('userSubscriptions.resetQuotaNoExpiry')
+  }
+
+  const expiresAt = toLocalDateStart(new Date(subscription.expires_at))
+  if (isNaN(expiresAt.getTime())) {
+    return t('userSubscriptions.resetQuotaInvalidExpiry')
+  }
+
+  if (expiresAt.getTime() <= toLocalDateStart(new Date()).getTime()) {
+    return t('userSubscriptions.resetQuotaExpiredToday')
+  }
+
+  return null
+}
+
+function openResetQuotaDialog(subscription: UserSubscription): void {
+  resettingSubscription.value = subscription
+  showResetQuotaDialog.value = true
+}
+
+function closeResetQuotaDialog(): void {
+  showResetQuotaDialog.value = false
+  resettingSubscription.value = null
+}
+
+async function confirmResetQuota(): Promise<void> {
+  if (!resettingSubscription.value || isResettingQuota.value) return
+
+  const resetError = getResetQuotaError(resettingSubscription.value)
+  if (resetError) {
+    appStore.showError(resetError)
+    showResetQuotaDialog.value = false
+    resettingSubscription.value = null
+    return
+  }
+
+  isResettingQuota.value = true
+  try {
+    await subscriptionsAPI.resetQuota(resettingSubscription.value.id)
+    appStore.showSuccess(t('userSubscriptions.resetQuotaSuccess'))
+    showResetQuotaDialog.value = false
+    resettingSubscription.value = null
+    await loadSubscriptions()
+  } catch (error: any) {
+    if (error?.status === 404) {
+      appStore.showError(t('userSubscriptions.resetQuotaNotSupported'))
+      showResetQuotaDialog.value = false
+      resettingSubscription.value = null
+      return
+    }
+
+    appStore.showError(error.response?.data?.detail || t('userSubscriptions.resetQuotaFailed'))
+    showResetQuotaDialog.value = false
+    resettingSubscription.value = null
+    console.error('Failed to reset subscription quota:', error)
+  } finally {
+    isResettingQuota.value = false
+  }
 }
 
 onMounted(() => {
