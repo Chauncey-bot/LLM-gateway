@@ -15,7 +15,7 @@
       </div>
 
       <!-- Empty State -->
-      <div v-else-if="subscriptions.length === 0" class="surface-tile p-12 text-center">
+        <div v-else-if="activeSubscriptions.length === 0" class="surface-tile p-12 text-center">
         <div
           class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-white/10"
         >
@@ -32,7 +32,7 @@
       <!-- Subscriptions Grid -->
       <div v-else class="grid gap-6 lg:grid-cols-2">
         <div
-          v-for="subscription in subscriptions"
+          v-for="subscription in activeSubscriptions"
           :key="subscription.id"
           class="card card-hover overflow-hidden"
         >
@@ -266,7 +266,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import subscriptionsAPI from '@/api/subscriptions'
@@ -280,6 +280,15 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const subscriptions = ref<UserSubscription[]>([])
+const activeSubscriptions = computed(() =>
+  subscriptions.value.filter((subscription) => {
+    if (!subscription.expires_at) {
+      return true
+    }
+
+    return new Date(subscription.expires_at).getTime() > Date.now()
+  })
+)
 const loading = ref(true)
 const showResetQuotaDialog = ref(false)
 const isResettingQuota = ref(false)

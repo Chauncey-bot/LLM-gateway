@@ -1596,7 +1596,7 @@ const editKey = (key: ApiKey) => {
     ip_blacklist: (key.ip_blacklist || []).join('\n'),
     enable_quota: false,
     quota: null,
-    enable_rate_limit: (key.rate_limit_5h > 0) || (key.rate_limit_7d > 0),
+    enable_rate_limit: (key.rate_limit_1d > 0) || (key.rate_limit_5h > 0) || (key.rate_limit_7d > 0),
     rate_limit_5h: key.rate_limit_5h || null,
     rate_limit_1d: key.rate_limit_1d > 0 ? key.rate_limit_1d : (key.quota > 0 ? key.quota : null),
     rate_limit_7d: key.rate_limit_7d || null,
@@ -1782,12 +1782,15 @@ const handleSubmit = async () => {
     expiresAt = ''
   }
 
-  // Calculate rate limit values (send 0 when toggle is off)
-  const rateLimitData = formData.value.enable_rate_limit ? {
-    rate_limit_5h: formData.value.rate_limit_5h && formData.value.rate_limit_5h > 0 ? formData.value.rate_limit_5h : 0,
-    rate_limit_1d: formData.value.rate_limit_1d && formData.value.rate_limit_1d > 0 ? formData.value.rate_limit_1d : 0,
-    rate_limit_7d: formData.value.rate_limit_7d && formData.value.rate_limit_7d > 0 ? formData.value.rate_limit_7d : 0,
-  } : { rate_limit_5h: 0, rate_limit_1d: 0, rate_limit_7d: 0 }
+  // Daily limit is always persisted; 5h/7d limits are controlled by the toggle.
+  const normalizeLimit = (value: number | null): number => {
+    return value != null && Number.isFinite(value) && value > 0 ? value : 0
+  }
+  const rateLimitData = {
+    rate_limit_1d: normalizeLimit(formData.value.rate_limit_1d),
+    rate_limit_5h: formData.value.enable_rate_limit ? normalizeLimit(formData.value.rate_limit_5h) : 0,
+    rate_limit_7d: formData.value.enable_rate_limit ? normalizeLimit(formData.value.rate_limit_7d) : 0,
+  }
 
   submitting.value = true
   try {
