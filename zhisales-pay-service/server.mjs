@@ -34,6 +34,8 @@ const config = {
   alipayBaseUrl: (process.env.ALIPAY_OPEN_BASE_URL || "").replace(/\/+$/, ""),
   alipayToken: process.env.ALIPAY_OPEN_TOKEN || "",
   alipaySign: process.env.ALIPAY_OPEN_SIGN || "",
+  trafficPackDurationHours: Number(process.env.TRAFFIC_PACK_DURATION_HOURS || 24),
+  trafficPackReclaimIntervalMs: Number(process.env.TRAFFIC_PACK_RECLAIM_INTERVAL_MS || 60_000),
 };
 
 const pool = new Pool(config.db);
@@ -50,11 +52,13 @@ const skuGroupCacheTtlMs = 30_000;
 
 const HIDDEN_SKU_CODES = new Set([
   "coding-plan-daily-1200",
-  "coding-plan-daily-1600"
+  "coding-plan-daily-1600",
+  "coding-plan-daily-2800"
 ]);
-const HIDDEN_SKU_AMOUNT_CENTS = new Set([300000, 400000]);
+const HIDDEN_SKU_AMOUNT_CENTS = new Set([300000, 400000, 700000]);
 const paymentPollIntervalMs = Number(process.env.PAYMENT_POLL_INTERVAL_MS || 60_000);
 let paymentPollTimer = null;
+let trafficPackReclaimTimer = null;
 
 app.use(express.json({ limit: "512kb" }));
 app.use(express.urlencoded({ extended: false, limit: "512kb" }));
@@ -74,6 +78,10 @@ function orderTitleFromSku(sku) {
 function orderBodyFromSku(sku) {
   if (sku.type === "subscription") {
     return `${sku.title} / group ${sku.group_id} / ${sku.validity_days} days`;
+  }
+  if (sku.type === "traffic") {
+    const bonusAmount = Number(sku.daily_quota_bonus_usd || sku.balance_amount || 0);
+    return `${sku.title} / traffic +$${bonusAmount}`;
   }
   return `${sku.title} / balance +${sku.balance_amount}`;
 }
@@ -149,6 +157,21 @@ function amountToCents(value) {
 function parseOptionalNumber(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function parseDecimalNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  return numeric;
+}
+
+function nowDateWithHoursOffset(hours = 0) {
+  return new Date(Date.now() + hours * 60 * 60 * 1000);
 }
 
 function normalizeTradingStatus(status) {
@@ -235,9 +258,11 @@ async function readCatalog() {
   const parsed = JSON.parse(raw);
   const subscriptions = Array.isArray(parsed.subscriptions) ? parsed.subscriptions : [];
   const balancePacks = Array.isArray(parsed.balance_packs) ? parsed.balance_packs : [];
+  const trafficPacks = Array.isArray(parsed.traffic_packs) ? parsed.traffic_packs : [];
   return {
     subscriptions: subscriptions.map((item) => ({ ...item, type: "subscription" })),
     balancePacks: balancePacks.map((item) => ({ ...item, type: "balance" })),
+    trafficPacks: trafficPacks.map((item) => ({ ...item, type: "traffic" })),
   };
 }
 
@@ -256,6 +281,13 @@ async function getEnabledCatalog() {
       return !HIDDEN_SKU_AMOUNT_CENTS.has(amountCents);
     }),
     balancePacks: catalog.balancePacks.filter((item) => item.enabled && Number(item.amount_cents) > 0),
+    trafficPacks: catalog.trafficPacks.filter((item) => {
+      const amountCents = Number(item.amount_cents);
+      if (!item.enabled || Number.isNaN(amountCents) || amountCents <= 0) {
+        return false;
+      }
+      return true;
+    }),
   };
 }
 
@@ -307,6 +339,13 @@ async function initDb() {
       raw_notify_response JSONB,
       notify_received_at TIMESTAMPTZ,
       last_checked_at TIMESTAMPTZ,
+      traffic_pack_bonus_usd NUMERIC(20,8),
+      traffic_pack_base_daily_quota_usd NUMERIC(20,8),
+      traffic_pack_applied_at TIMESTAMPTZ,
+      traffic_pack_expires_at TIMESTAMPTZ,
+      traffic_pack_reverted BOOLEAN NOT NULL DEFAULT FALSE,
+      traffic_pack_reverted_at TIMESTAMPTZ,
+      traffic_pack_revert_error TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -316,6 +355,16 @@ async function initDb() {
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS user_username TEXT;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS raw_notify_response JSONB;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS notify_received_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_bonus_usd NUMERIC(20,8);`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_base_daily_quota_usd NUMERIC(20,8);`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_applied_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_expires_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_reverted BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_reverted_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_revert_error TEXT;`);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_payment_orders_traffic_pack_reclaim ON payment_orders (traffic_pack_expires_at)\n   WHERE sku_type = 'traffic' AND COALESCE(traffic_pack_reverted, false) = false;`,
+  );
 }
 
 async function sub2apiJson(pathname, options = {}) {
@@ -390,6 +439,17 @@ async function sub2apiAdminJson(pathname, options = {}) {
   });
 }
 
+async function getAdminUserById(userId) {
+  return sub2apiAdminJson(`/api/v1/admin/users/${Number(userId)}`);
+}
+
+async function updateAdminUserQuotaDailyLimit(userId, payload) {
+  return sub2apiAdminJson(`/api/v1/admin/users/${Number(userId)}`, {
+    method: "PUT",
+    body: payload,
+  });
+}
+
 async function listUserSubscriptions(userId) {
   const data = await sub2apiAdminJson(`/api/v1/admin/users/${userId}/subscriptions?page=1&page_size=100`);
   return normalizeSubscriptionListResponse(data);
@@ -441,7 +501,9 @@ async function fulfillOrder(order, client) {
   }
 
   try {
-    if (order.sku_type === "subscription") {
+    if (order.sku_type === "traffic") {
+      order = await applyTrafficPackOrder(order, client);
+    } else if (order.sku_type === "subscription") {
       await fulfillSubscriptionWithRetry(order, {
         listSubscriptions: listUserSubscriptions,
         submitFulfillment: async (fulfillment) => {
@@ -451,28 +513,43 @@ async function fulfillOrder(order, client) {
           });
         },
       });
+
+      const { rows } = await client.query(
+        `
+        UPDATE payment_orders
+        SET fulfillment_status = 'fulfilled',
+            fulfilled_at = NOW(),
+            error_message = NULL,
+            updated_at = NOW()
+        WHERE merchant_order_id = $1
+        RETURNING *
+        `,
+        [order.merchant_order_id],
+      );
+      order = rows[0];
     } else {
       const fulfillment = buildOrderFulfillmentRequest(order, []);
       await sub2apiAdminJson(fulfillment.path, {
         method: "POST",
         body: fulfillment.body,
       });
+
+      const { rows } = await client.query(
+        `
+        UPDATE payment_orders
+        SET fulfillment_status = 'fulfilled',
+            fulfilled_at = NOW(),
+            error_message = NULL,
+            updated_at = NOW()
+        WHERE merchant_order_id = $1
+        RETURNING *
+        `,
+        [order.merchant_order_id],
+      );
+      order = rows[0];
     }
 
-    const { rows } = await client.query(
-      `
-      UPDATE payment_orders
-      SET fulfillment_status = 'fulfilled',
-          fulfilled_at = NOW(),
-          error_message = NULL,
-          updated_at = NOW()
-      WHERE merchant_order_id = $1
-      RETURNING *
-      `,
-      [order.merchant_order_id],
-    );
-
-    const fulfilledOrder = rows[0];
+    const fulfilledOrder = order;
     try {
       await notifyReferralReward(fulfilledOrder);
     } catch (callbackError) {
@@ -631,6 +708,53 @@ function isOlderThan(dateValue, minutes) {
   return Date.now() - timestamp > minutes * 60_000;
 }
 
+function getTrafficPackExpiresAt() {
+  return nowDateWithHoursOffset(config.trafficPackDurationHours);
+}
+
+function getTrafficPackBonus(order) {
+  const bonus = parseDecimalNumber(order.balance_amount);
+  return bonus !== null ? bonus : 0;
+}
+
+async function hasActiveTrafficPackForUser(client, userId, options = {}) {
+  const rows = await client.query(
+    `
+    SELECT 1
+    FROM payment_orders
+    WHERE user_id = $1
+      AND sku_type = 'traffic'
+      AND (
+        (fulfillment_status = 'pending' AND trade_status IN ('created', 'pending', 'paid'))
+        OR (
+          fulfillment_status = 'fulfilled'
+          AND COALESCE(traffic_pack_reverted, false) = false
+          AND traffic_pack_expires_at > NOW()
+        )
+      )
+      AND ($2::text IS NULL OR merchant_order_id <> $2)
+    LIMIT 1
+    `,
+    [Number(userId), options.excludeMerchantOrderId || null],
+  );
+  return rows.rows.length > 0;
+}
+
+function buildQuotaDailyLimitRestorePayload(limit) {
+  const parsed = parseDecimalNumber(limit);
+  if (parsed === null) {
+    return { quota_daily_limit: null };
+  }
+  return { quota_daily_limit: parsed };
+}
+
+async function ensureNoActiveTrafficPack(userId, client, excludeMerchantOrderId) {
+  const hasActive = await hasActiveTrafficPackForUser(client, userId, { excludeMerchantOrderId });
+  if (hasActive) {
+    throw new Error("An active traffic pack already exists for this user");
+  }
+}
+
 async function queryTrade(order) {
   if (!isQueryConfigured()) {
     return { supported: false, message: "Alipay credentials are not configured." };
@@ -705,6 +829,144 @@ async function queryTrade(order) {
   };
 }
 
+async function applyTrafficPackOrder(order, client) {
+  const bonusQuotaUsd = getTrafficPackBonus(order);
+  if (!Number.isFinite(bonusQuotaUsd) || bonusQuotaUsd <= 0) {
+    throw new Error(`Invalid traffic pack quota bonus for order ${order.merchant_order_id}`);
+  }
+
+  await ensureNoActiveTrafficPack(order.user_id, client, order.merchant_order_id);
+
+  const user = await getAdminUserById(order.user_id);
+  const currentDailyLimit = parseDecimalNumber(user.quota_daily_limit);
+  if (!Number.isFinite(currentDailyLimit) || currentDailyLimit <= 0) {
+    throw new Error(`User ${order.user_id} does not have a finite current daily quota limit`);
+  }
+
+  const newDailyLimit = currentDailyLimit + bonusQuotaUsd;
+  const expiresAt = getTrafficPackExpiresAt();
+
+  await updateAdminUserQuotaDailyLimit(order.user_id, {
+    quota_daily_limit: newDailyLimit,
+  });
+
+  const update = await client.query(
+    `
+    UPDATE payment_orders
+    SET fulfillment_status = 'fulfilled',
+        fulfilled_at = NOW(),
+        error_message = NULL,
+        traffic_pack_bonus_usd = $2,
+        traffic_pack_base_daily_quota_usd = $3,
+        traffic_pack_applied_at = NOW(),
+        traffic_pack_expires_at = $4,
+        updated_at = NOW()
+    WHERE merchant_order_id = $1
+    RETURNING *
+    `,
+    [
+      order.merchant_order_id,
+      bonusQuotaUsd,
+      currentDailyLimit,
+      expiresAt,
+    ],
+  );
+  return update.rows[0];
+}
+
+async function reconcileExpiredTrafficPacks(limit = 20) {
+  const client = await pool.connect();
+  let reclaimed = 0;
+  let failed = 0;
+
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `
+      SELECT *
+      FROM payment_orders
+      WHERE sku_type = 'traffic'
+        AND fulfillment_status = 'fulfilled'
+        AND COALESCE(traffic_pack_reverted, false) = false
+        AND traffic_pack_expires_at IS NOT NULL
+        AND traffic_pack_expires_at <= NOW()
+      ORDER BY traffic_pack_expires_at ASC
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED
+      `,
+      [limit],
+    );
+
+    for (const row of rows) {
+      const restoreAt = parseDecimalNumber(row.traffic_pack_base_daily_quota_usd);
+      const payload = buildQuotaDailyLimitRestorePayload(restoreAt);
+
+      try {
+        await updateAdminUserQuotaDailyLimit(row.user_id, payload);
+        await client.query(
+          `
+          UPDATE payment_orders
+          SET traffic_pack_reverted = true,
+              traffic_pack_reverted_at = NOW(),
+              traffic_pack_revert_error = NULL,
+              updated_at = NOW()
+          WHERE merchant_order_id = $1
+          `,
+          [row.merchant_order_id],
+        );
+        reclaimed += 1;
+      } catch (error) {
+        await client.query(
+          `
+          UPDATE payment_orders
+          SET traffic_pack_revert_error = $2,
+              updated_at = NOW()
+          WHERE merchant_order_id = $1
+          `,
+          [row.merchant_order_id, error instanceof Error ? error.message : String(error)],
+        );
+        failed += 1;
+      }
+    }
+
+    await client.query("COMMIT");
+    return { scanned: rows.length, reclaimed, failed, skipped: false };
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function startTrafficPackReclaimPoller() {
+  if (trafficPackReclaimTimer || config.trafficPackReclaimIntervalMs <= 0) {
+    return;
+  }
+
+  const run = async () => {
+    try {
+      const result = await reconcileExpiredTrafficPacks();
+      if (!result.skipped && result.reclaimed > 0) {
+        console.log(
+          `[zhisales-pay-service] traffic pack reclaim scanned=${result.scanned} reclaimed=${result.reclaimed} failed=${result.failed}`,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        "[zhisales-pay-service] traffic pack reclaim poller failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  };
+
+  trafficPackReclaimTimer = setInterval(run, config.trafficPackReclaimIntervalMs);
+  trafficPackReclaimTimer.unref?.();
+  setTimeout(run, 7_000).unref?.();
+}
+
 function normalizeOrderRow(row) {
   return {
     merchantOrderId: row.merchant_order_id,
@@ -727,6 +989,14 @@ function normalizeOrderRow(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastCheckedAt: row.last_checked_at,
+    trafficPackBonusUsd: row.traffic_pack_bonus_usd === null ? null : Number(row.traffic_pack_bonus_usd),
+    trafficPackBaseDailyQuotaUsd:
+      row.traffic_pack_base_daily_quota_usd === null ? null : Number(row.traffic_pack_base_daily_quota_usd),
+    trafficPackAppliedAt: row.traffic_pack_applied_at,
+    trafficPackExpiresAt: row.traffic_pack_expires_at,
+    trafficPackReverted: row.traffic_pack_reverted,
+    trafficPackRevertedAt: row.traffic_pack_reverted_at,
+    trafficPackRevertError: row.traffic_pack_revert_error,
   };
 }
 
@@ -962,9 +1232,14 @@ function html(mode) {
             return '<div class="empty">' + title + ' 暂未配置。请先在支付服务的 catalog.json 里填写价格并启用 SKU。</div>';
           }
           return '<div><div class="section-title">' + title + '</div><div class="grid">' + items.map(function (item) {
-            const extra = type === 'subscription'
-              ? '<div class="meta-list"><div>Group ID: ' + item.groupId + '</div><div>有效期: ' + item.validityDays + ' 天</div></div>'
-              : '<div class="meta-list"><div>到账余额: ' + item.balanceAmount + '</div></div>';
+            let extra = '';
+            if (type === 'subscription') {
+              extra = '<div class="meta-list"><div>Group ID: ' + item.groupId + '</div><div>有效期: ' + item.validityDays + ' 天</div></div>';
+            } else if (type === 'balance') {
+              extra = '<div class="meta-list"><div>到账余额: ' + item.balanceAmount + '</div></div>';
+            } else if (type === 'traffic') {
+              extra = '<div class="meta-list"><div>当日额度加成: ' + item.bonusQuotaUsd + '</div><div>有效期: ' + item.validityDays + ' 天</div></div>';
+            }
             return '<div class="card">' +
               '<h3>' + item.title + '</h3>' +
               '<div class="desc">' + (item.description || '') + '</div>' +
@@ -1002,6 +1277,7 @@ function html(mode) {
               renderUser(session.user) +
               renderCatalogSection('订阅套餐', catalog.subscriptions || [], 'subscription') +
               renderCatalogSection('余额充值', catalog.balancePacks || [], 'balance') +
+              renderCatalogSection('流量包', catalog.trafficPacks || [], 'traffic') +
             '</div>';
           appEl.querySelectorAll('[data-sku]').forEach(function (button) {
             button.addEventListener('click', async function () {
@@ -1205,6 +1481,14 @@ app.get("/pay-api/catalog", async (_req, res) => {
         amountCents: Number(item.amount_cents),
         balanceAmount: Number(item.balance_amount),
       })),
+      trafficPacks: catalog.trafficPacks.map((item) => ({
+        code: item.code,
+        title: item.title,
+        description: item.description,
+        amountCents: Number(item.amount_cents),
+        bonusQuotaUsd: Number(item.daily_quota_bonus_usd || 0),
+        validityDays: Number(item.validity_days || 1),
+      })),
     });
   } catch (error) {
     jsonError(res, 500, error instanceof Error ? error.message : "Failed to load catalog");
@@ -1217,29 +1501,32 @@ app.post("/pay-api/orders", async (req, res) => {
     const token = readBearerToken(req);
     const user = await resolveCurrentUser(token);
     const catalog = await getEnabledCatalog();
-    const allSkus = [...catalog.subscriptions, ...catalog.balancePacks];
+    const allSkus = [...catalog.subscriptions, ...catalog.balancePacks, ...catalog.trafficPacks];
     const sku = allSkus.find((item) => item.code === req.body?.skuCode);
     if (!sku) {
       return jsonError(res, 400, "Invalid or disabled skuCode");
     }
-
+    const isTrafficPack = sku.type === "traffic";
     const merchantOrderId = generateMerchantOrderId();
     const draftOrder = {
       merchantOrderId,
       userId: Number(user.id),
       userEmail: user.email || null,
       userUsername: user.username || null,
-      skuType: sku.type,
+      skuType: isTrafficPack ? "traffic" : sku.type,
       skuCode: sku.code,
       groupId: sku.type === "subscription" ? Number(sku.group_id) : null,
       validityDays: sku.type === "subscription" ? Number(sku.validity_days || 30) : null,
       balanceAmount:
-        sku.type === "balance"
-          ? parseOptionalNumber(sku.balance_amount)
+        sku.type === "balance" || sku.type === "traffic"
+          ? parseOptionalNumber(sku.balance_amount ?? sku.daily_quota_bonus_usd)
           : parseOptionalNumber(sku.topup_balance_amount),
       amountCents: Number(sku.amount_cents),
       clientIp: req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() || req.socket.remoteAddress || "",
     };
+    if (isTrafficPack) {
+      await ensureNoActiveTrafficPack(draftOrder.userId, client);
+    }
 
     const trading = await createTradingOrder(draftOrder, sku);
     const { rows } = await client.query(
@@ -1276,7 +1563,9 @@ app.post("/pay-api/orders", async (req, res) => {
       querySupported: isQueryConfigured(),
     });
   } catch (error) {
-    jsonError(res, 500, error instanceof Error ? error.message : "Failed to create order");
+    const message = error instanceof Error ? error.message : "Failed to create order";
+    const status = message.includes("active traffic pack") ? 409 : 500;
+    jsonError(res, status, message);
   } finally {
     client.release();
   }
@@ -1798,6 +2087,7 @@ app.post("/pay-api/trading/notify", async (req, res) => {
 async function main() {
   await initDb();
   startPaymentOrderPoller();
+  startTrafficPackReclaimPoller();
   app.listen(config.port, () => {
     console.log(`[zhisales-pay-service] listening on :${config.port}`);
   });

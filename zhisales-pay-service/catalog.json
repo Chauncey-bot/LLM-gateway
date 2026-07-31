@@ -94,7 +94,7 @@
     },
     {
       "code": "coding-plan-daily-2800",
-      "enabled": true,
+      "enabled": false,
       "title": "Coding Plan 2800 Daily",
       "description": "7000 RMB per month, 2800 USD daily limit.",
       "amount_cents": 700000,
@@ -118,6 +118,17 @@
       "amount_cents": 0,
       "group_id": 9,
       "validity_days": 30
+    }
+  ],
+  "traffic_packs": [
+    {
+      "code": "openai-daily-traffic-100",
+      "enabled": true,
+      "title": "OpenAI Daily Traffic Pack",
+      "description": "¥10 for +$100 daily quota today, reset to the original quota tomorrow.",
+      "amount_cents": 1000,
+      "daily_quota_bonus_usd": 100,
+      "validity_days": 1
     }
   ],
   "balance_packs": [

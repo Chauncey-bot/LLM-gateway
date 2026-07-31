@@ -32,14 +32,24 @@ export interface PaymentCatalogBalancePack {
   balanceAmount: number | null
 }
 
+export interface PaymentCatalogTrafficPack {
+  code: string
+  title: string
+  description: string
+  amountCents: number
+  bonusQuotaUsd: number
+  validityDays: number | null
+}
+
 export interface PaymentCatalogResponse {
   subscriptions: PaymentCatalogSubscription[]
   balancePacks: PaymentCatalogBalancePack[]
+  trafficPacks: PaymentCatalogTrafficPack[]
 }
 
 export type PaymentTradeStatus = 'pending' | 'paid' | 'closed' | 'failed' | 'refunded' | string
 export type PaymentFulfillmentStatus = 'pending' | 'fulfilled' | 'fulfillment_failed' | string
-export type PaymentSkuType = 'subscription' | 'balance' | string
+export type PaymentSkuType = 'subscription' | 'balance' | 'traffic' | string
 
 export interface PaymentOrder {
   merchantOrderId: string

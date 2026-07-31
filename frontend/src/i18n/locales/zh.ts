@@ -5012,6 +5012,9 @@ export default {
     emptyCatalogDesc: '支付服务暂未配置可售 SKU，请先检查 catalog.json 和支付服务发布状态。',
     subscriptionPlans: '订阅套餐',
     subscriptionPlansDesc: '适合需要固定分组和有效期的订阅购买。',
+    trafficPacks: '流量包',
+    trafficPacksDesc: '适合按日临时补充额度，今日生效，明日恢复。',
+    trafficQuotaBonus: '当日额度加成',
     balancePacks: '余额充值',
     balancePacksDesc: '适合按需充值余额，供后续 API 使用。',
     noDescription: '暂无商品说明',
@@ -5024,7 +5027,8 @@ export default {
     invalidForm: '支付平台没有返回有效表单。',
     createOrderFailed: '创建支付订单失败，请稍后重试。',
     emptySubscriptions: '当前没有可购买的订阅套餐。',
-    emptyBalancePacks: '当前没有可购买的余额充值包。'
+    emptyBalancePacks: '当前没有可购买的余额充值包。',
+    emptyTrafficPacks: '当前没有可购买的流量包。'
   },
 
   orders: {
@@ -5067,10 +5071,12 @@ export default {
     checkResultTradeStopped: '订单当前支付状态为 {status}，未执行发放。',
     checkResultPending: '订单仍在确认中，支付完成后会自动进入发放流程，请稍后重试。',
     subscriptionSummary: 'Group {groupId} / {validityDays} 天',
+    trafficSummary: '当日额度 +{balanceAmount}',
     balanceSummary: '余额 +{balanceAmount}',
     types: {
       subscription: '订阅',
-      balance: '余额'
+      balance: '余额',
+      traffic: '流量包'
     },
     columns: {
       orderId: '订单号',

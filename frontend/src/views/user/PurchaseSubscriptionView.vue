@@ -178,6 +178,80 @@
         <section class="space-y-4">
             <div>
               <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
+                {{ t('purchase.trafficPacks') }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">
+                {{ t('purchase.trafficPacksDesc') }}
+              </p>
+            </div>
+
+            <div
+              v-if="visibleTrafficPacks.length > 0"
+              class="grid gap-5 md:grid-cols-2 xl:grid-cols-3"
+            >
+              <article
+                v-for="item in visibleTrafficPacks"
+                :key="item.code"
+                class="card card-hover flex h-full flex-col overflow-hidden"
+              >
+                <div class="section-toolbar flex items-start justify-between">
+                  <div class="flex items-start gap-3">
+                    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
+                      <Icon name="dollar" size="md" />
+                    </div>
+                    <div>
+                      <h3 class="font-semibold text-slate-900 dark:text-white">{{ item.title }}</h3>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ item.code }}</p>
+                    </div>
+                  </div>
+                  <span class="badge badge-secondary text-xs">
+                    {{ t('orders.types.traffic') }}
+                  </span>
+                </div>
+
+                <div class="flex flex-1 flex-col gap-4 p-4">
+                  <p class="min-h-[48px] text-sm leading-6 text-gray-600 dark:text-dark-300">
+                    {{ item.description || t('purchase.noDescription') }}
+                  </p>
+
+                  <div class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+                    {{ formatAmount(item.amountCents) }}
+                  </div>
+
+                  <div class="rounded-2xl bg-slate-50 px-3 py-3 text-sm text-gray-500 dark:bg-white/5 dark:text-dark-400">
+                    <div class="text-xs uppercase tracking-wide">{{ t('purchase.trafficQuotaBonus') }}</div>
+                    <div class="mt-1 font-medium text-slate-900 dark:text-white">
+                      +{{ item.bonusQuotaUsd ?? '-' }}
+                    </div>
+                  </div>
+
+                  <div class="rounded-2xl bg-slate-50 px-3 py-3 text-sm text-gray-500 dark:bg-white/5 dark:text-dark-400">
+                    <div class="text-xs uppercase tracking-wide">{{ t('purchase.validityDays') }}</div>
+                    <div class="mt-1 font-medium text-slate-900 dark:text-white">
+                      {{ item.validityDays ?? '-' }}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    class="btn btn-primary mt-auto"
+                    :disabled="submittingSkuCode === item.code"
+                    @click="submitOrder(item.code)"
+                  >
+                    {{ submittingSkuCode === item.code ? t('purchase.creatingOrder') : t('purchase.buyNow') }}
+                  </button>
+                </div>
+              </article>
+            </div>
+
+            <div v-else class="rounded-2xl border border-dashed border-gray-200 px-4 py-6 text-sm text-gray-500 dark:border-white/10 dark:text-dark-400">
+              {{ t('purchase.emptyTrafficPacks') }}
+            </div>
+          </section>
+
+        <section class="space-y-4">
+            <div>
+              <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
                 {{ t('purchase.balancePacks') }}
               </h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">
@@ -272,7 +346,8 @@ const loadError = ref('')
 const session = ref<PaymentSessionResponse | null>(null)
 const catalog = ref<PaymentCatalogResponse>({
   subscriptions: [],
-  balancePacks: []
+  balancePacks: [],
+  trafficPacks: []
 })
 const querySupported = ref(true)
 const submittingSkuCode = ref('')
@@ -280,7 +355,14 @@ const purchaseTheme = ref<'light' | 'dark'>('light')
 
 let themeObserver: MutationObserver | null = null
 
-const hiddenCatalogAmountCents = new Set<number | string>([300000, 400000, '300000', '400000'])
+const hiddenCatalogAmountCents = new Set<number | string>([
+  300000,
+  400000,
+  700000,
+  '300000',
+  '400000',
+  '700000'
+])
 
 const isCatalogItemHidden = (amountCents: number | string): boolean => {
   const normalizedAmount = Number(amountCents)
@@ -292,6 +374,9 @@ const visibleSubscriptions = computed(() =>
 )
 const visibleBalancePacks = computed(() =>
   catalog.value.balancePacks.filter((item) => !isCatalogItemHidden(item.amountCents))
+)
+const visibleTrafficPacks = computed(() =>
+  catalog.value.trafficPacks.filter((item) => !isCatalogItemHidden(item.amountCents))
 )
 
 const purchaseEnabled = computed(() => {
@@ -319,7 +404,9 @@ const hasLegacyPurchaseUrl = computed(() => {
 })
 
 const catalogEmpty = computed(() => {
-  return visibleSubscriptions.value.length === 0 && visibleBalancePacks.value.length === 0
+  return visibleSubscriptions.value.length === 0 &&
+    visibleBalancePacks.value.length === 0 &&
+    visibleTrafficPacks.value.length === 0
 })
 
 function formatAmount(amountCents: number): string {

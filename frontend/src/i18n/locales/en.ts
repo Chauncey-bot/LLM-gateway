@@ -4856,6 +4856,9 @@ export default {
       'The payment service does not currently expose any sellable SKUs. Check catalog.json and payment service deployment.',
     subscriptionPlans: 'Subscription plans',
     subscriptionPlansDesc: 'Best for fixed group assignment and time-based access.',
+    trafficPacks: 'Traffic packs',
+    trafficPacksDesc: 'Use to temporarily add daily quota for today and reset tomorrow.',
+    trafficQuotaBonus: 'Today bonus',
     balancePacks: 'Balance recharge',
     balancePacksDesc: 'Best for topping up account balance for future API usage.',
     noDescription: 'No description provided',
@@ -4868,7 +4871,8 @@ export default {
     invalidForm: 'The payment platform did not return a valid form.',
     createOrderFailed: 'Failed to create payment order. Please try again later.',
     emptySubscriptions: 'There are no subscription plans available right now.',
-    emptyBalancePacks: 'There are no balance recharge packs available right now.'
+    emptyBalancePacks: 'There are no balance recharge packs available right now.',
+    emptyTrafficPacks: 'There are no traffic packs available right now.'
   },
 
   orders: {
@@ -4917,10 +4921,12 @@ export default {
     checkResultPending:
       'The order is still being confirmed. Once payment settles, it will enter fulfillment automatically. Please retry later.',
     subscriptionSummary: 'Group {groupId} / {validityDays} days',
+    trafficSummary: 'Daily bonus +{balanceAmount}',
     balanceSummary: 'Balance +{balanceAmount}',
     types: {
       subscription: 'Subscription',
-      balance: 'Balance'
+      balance: 'Balance',
+      traffic: 'Traffic Pack'
     },
     columns: {
       orderId: 'Order ID',

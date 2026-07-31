@@ -324,6 +324,11 @@ function orderSummary(order: PaymentOrder): string {
       validityDays: order.validityDays ?? '-'
     })
   }
+  if (order.skuType === 'traffic') {
+    return t('orders.trafficSummary', {
+      balanceAmount: order.balanceAmount ?? '-'
+    })
+  }
 
   return t('orders.balanceSummary', {
     balanceAmount: order.balanceAmount ?? '-'

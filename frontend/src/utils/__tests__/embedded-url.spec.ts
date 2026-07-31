@@ -60,6 +60,20 @@ describe('embedded-url', () => {
     expect(buildEmbeddedUrl('not a url', 1, 'token')).toBe('not a url')
   })
 
+  it('adds embedded params for root-relative url', () => {
+    const result = buildEmbeddedUrl('/purchase.html', 77, 'token-456', 'light', 'en')
+
+    const url = new URL(result)
+    expect(url.pathname).toBe('/purchase.html')
+    expect(url.searchParams.get('user_id')).toBe('77')
+    expect(url.searchParams.get('token')).toBe('token-456')
+    expect(url.searchParams.get('theme')).toBe('light')
+    expect(url.searchParams.get('lang')).toBe('en')
+    expect(url.searchParams.get('ui_mode')).toBe('embedded')
+    expect(url.searchParams.get('src_host')).toBe('https://app.example.com')
+    expect(url.searchParams.get('src_url')).toBe('https://app.example.com/user/purchase')
+  })
+
   it('detects dark mode from document root class', () => {
     document.documentElement.classList.add('dark')
     expect(detectTheme()).toBe('dark')

@@ -21,8 +21,20 @@ export function buildEmbeddedUrl(
   lang?: string,
 ): string {
   if (!baseUrl) return baseUrl
+  const parseUrl = () => {
+    try {
+      return new URL(baseUrl)
+    } catch {
+      if (typeof window === 'undefined' || /\s/.test(baseUrl)) {
+        return null
+      }
+      return new URL(baseUrl, window.location.origin)
+    }
+  }
+
   try {
-    const url = new URL(baseUrl)
+    const url = parseUrl()
+    if (!url) return baseUrl
     if (userId) {
       url.searchParams.set(EMBEDDED_USER_ID_QUERY_KEY, String(userId))
     }
