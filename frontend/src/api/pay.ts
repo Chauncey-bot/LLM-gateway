@@ -245,9 +245,24 @@ export async function listPaymentOrders(
 export async function listAdminPaymentOrders(
   params: PaymentOrderListParams = {}
 ): Promise<PaymentOrderListResponse> {
-  return payRequest<PaymentOrderListResponse>('/pay-api/admin/orders', {
-    query: { ...params }
-  })
+  try {
+    return await payRequest<PaymentOrderListResponse>('/pay-api/admin/orders', {
+      query: { ...params }
+    })
+  } catch (error) {
+    if (
+      isPayApiError(error) &&
+      (error.status === 404 ||
+        error.status === 405 ||
+        error.status === 410 ||
+        error.status === 501)
+    ) {
+      return payRequest<PaymentOrderListResponse>('/pay-api/orders', {
+        query: { ...params }
+      })
+    }
+    throw error
+  }
 }
 
 export async function updateAdminPaymentOrderStatus(
