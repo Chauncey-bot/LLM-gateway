@@ -1269,13 +1269,42 @@ const confirmResetQuota = async () => {
   if (resettingQuota.value) return
   resettingQuota.value = true
   try {
-    await adminAPI.subscriptions.resetQuota(resettingSubscription.value.id, { daily: true, weekly: true, monthly: true })
+    await adminAPI.subscriptions.resetQuota(resettingSubscription.value.id, {
+      daily: true,
+      weekly: true,
+      monthly: true
+    })
+    await loadSubscriptions()
     appStore.showSuccess(t('admin.subscriptions.quotaResetSuccess'))
     showResetQuotaConfirm.value = false
     resettingSubscription.value = null
-    await loadSubscriptions()
   } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.subscriptions.failedToResetQuota'))
+    const responseData = error?.response?.data || {}
+    const status = Number(error?.status ?? error?.response?.status)
+    const detail =
+      responseData?.detail ||
+      responseData?.message ||
+      error?.message ||
+      ''
+    const normalizedMessage = String(detail || '').toLowerCase()
+
+    if (
+      status >= 500 ||
+      status === 0 ||
+      normalizedMessage.includes('unavailable') ||
+      normalizedMessage.includes('service unavailable') ||
+      normalizedMessage.includes('后台服务') ||
+      normalizedMessage.includes('服务不可用')
+    ) {
+      appStore.showError(t('admin.subscriptions.resetQuotaBackendUnavailable'))
+      showResetQuotaConfirm.value = false
+      resettingSubscription.value = null
+      return
+    }
+
+    appStore.showError(
+      responseData?.detail || responseData?.message || t('admin.subscriptions.failedToResetQuota')
+    )
     console.error('Error resetting quota:', error)
   } finally {
     resettingQuota.value = false

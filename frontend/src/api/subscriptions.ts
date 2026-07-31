@@ -25,8 +25,8 @@ export interface SubscriptionSummary {
 
 export interface SubscriptionResetRequest {
   daily: boolean
-  weekly?: boolean
-  monthly?: boolean
+  weekly: boolean
+  monthly: boolean
 }
 
 /**
@@ -78,7 +78,7 @@ export async function getSubscriptionProgress(
  */
 export async function resetQuota(
   subscriptionId: number,
-  request: SubscriptionResetRequest = { daily: true }
+  request: SubscriptionResetRequest
 ): Promise<UserSubscription> {
   const { data } = await apiClient.post<UserSubscription>(
     `/subscriptions/${subscriptionId}/reset-quota`,

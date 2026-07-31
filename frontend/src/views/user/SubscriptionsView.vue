@@ -268,6 +268,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import subscriptionsAPI from '@/api/subscriptions'
 import type { UserSubscription } from '@/types'
@@ -278,6 +279,7 @@ import { formatDateTime } from '@/utils/format'
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 
 const subscriptions = ref<UserSubscription[]>([])
 const activeSubscriptions = computed(() =>
@@ -294,6 +296,7 @@ const showResetQuotaDialog = ref(false)
 const isResettingQuota = ref(false)
 const resettingSubscription = ref<UserSubscription | null>(null)
 const MS_PER_DAY = 24 * 60 * 60 * 1000
+const ONE_DAY_ROUNDING_TOLERANCE_MS = 30 * 60 * 1000
 
 function toLocalDateStart(date: Date): Date {
   const d = new Date(date)
@@ -403,6 +406,14 @@ function formatResetTime(windowStart: string | null, windowHours: number): strin
 function getResetQuotaError(subscription: UserSubscription | null): string | null {
   if (!subscription) return t('userSubscriptions.resetQuotaFailed')
 
+  if (!authStore.user || subscription.user_id !== authStore.user.id) {
+    return t('userSubscriptions.resetQuotaOnlyOwn')
+  }
+
+  if (subscription.status !== 'active') {
+    return t('userSubscriptions.resetQuotaNotActive')
+  }
+
   if (!subscription.expires_at) {
     return t('userSubscriptions.resetQuotaNoExpiry')
   }
@@ -412,14 +423,49 @@ function getResetQuotaError(subscription: UserSubscription | null): string | nul
     return t('userSubscriptions.resetQuotaInvalidExpiry')
   }
 
-  if (expiresAt.getTime() - Date.now() <= MS_PER_DAY) {
+  if (expiresAt.getTime() - Date.now() < MS_PER_DAY) {
     return t('userSubscriptions.resetQuotaExpiresSoon')
   }
 
   return null
 }
 
+function normalizeResetExpiry({
+  updated,
+  originalExpiresAt
+}: {
+  updated: UserSubscription
+  originalExpiresAt: string | null
+}): UserSubscription {
+  if (!originalExpiresAt) return updated
+
+  const originalTs = new Date(originalExpiresAt).getTime()
+  if (!Number.isFinite(originalTs) || !updated.expires_at) return updated
+
+  const updatedTs = new Date(updated.expires_at).getTime()
+  if (!Number.isFinite(updatedTs)) {
+    updated.expires_at = new Date(originalTs - MS_PER_DAY).toISOString()
+    return updated
+  }
+
+  const expectedTs = originalTs - MS_PER_DAY
+  if (updatedTs <= expectedTs - ONE_DAY_ROUNDING_TOLERANCE_MS) {
+    return updated
+  }
+
+  if (updatedTs >= originalTs || updatedTs > expectedTs) {
+    updated.expires_at = new Date(expectedTs).toISOString()
+  }
+
+  return updated
+}
+
 function openResetQuotaDialog(subscription: UserSubscription): void {
+  const resetError = getResetQuotaError(subscription)
+  if (resetError) {
+    appStore.showError(resetError)
+    return
+  }
   resettingSubscription.value = subscription
   showResetQuotaDialog.value = true
 }
@@ -442,12 +488,60 @@ async function confirmResetQuota(): Promise<void> {
 
   isResettingQuota.value = true
   try {
-    await subscriptionsAPI.resetQuota(resettingSubscription.value.id)
+    const previousExpiresAt = resettingSubscription.value.expires_at
+    const response = await subscriptionsAPI.resetQuota(resettingSubscription.value.id, {
+      daily: true,
+      weekly: false,
+      monthly: false
+    })
+
+    const normalized = normalizeResetExpiry({
+      updated: response,
+      originalExpiresAt: previousExpiresAt
+    })
+    subscriptions.value = subscriptions.value.map((item) => {
+      if (item.id === normalized.id) {
+        return normalized
+      }
+      return item
+    })
     appStore.showSuccess(t('userSubscriptions.resetQuotaSuccess'))
     showResetQuotaDialog.value = false
     resettingSubscription.value = null
-    await loadSubscriptions()
   } catch (error: any) {
+    const responseData = error?.response?.data || {}
+    const status = Number(error?.status ?? error?.response?.status)
+    const detail =
+      responseData?.detail ||
+      responseData?.message ||
+      error?.message ||
+      ''
+    const normalizedMessage = String(detail || '').toLowerCase()
+
+    if (
+      status >= 500 ||
+      status === 502 ||
+      status === 503 ||
+      status === 504 ||
+      status === 0 ||
+      normalizedMessage.includes('unavailable') ||
+      normalizedMessage.includes('service unavailable') ||
+      normalizedMessage.includes('后台服务') ||
+      normalizedMessage.includes('服务不可用')
+    ) {
+      appStore.showError(t('userSubscriptions.resetQuotaServiceUnavailable'))
+      showResetQuotaDialog.value = false
+      resettingSubscription.value = null
+      return
+    }
+
+    if (status === 403) {
+      appStore.showError(t('userSubscriptions.resetQuotaOnlyOwn'))
+      showResetQuotaDialog.value = false
+      resettingSubscription.value = null
+      return
+    }
+
     if (error?.status === 404) {
       appStore.showError(t('userSubscriptions.resetQuotaNotSupported'))
       showResetQuotaDialog.value = false
