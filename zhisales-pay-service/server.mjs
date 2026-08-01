@@ -34,7 +34,6 @@ const config = {
   alipayBaseUrl: (process.env.ALIPAY_OPEN_BASE_URL || "").replace(/\/+$/, ""),
   alipayToken: process.env.ALIPAY_OPEN_TOKEN || "",
   alipaySign: process.env.ALIPAY_OPEN_SIGN || "",
-  trafficPackDurationHours: Number(process.env.TRAFFIC_PACK_DURATION_HOURS || 24),
   trafficPackReclaimIntervalMs: Number(process.env.TRAFFIC_PACK_RECLAIM_INTERVAL_MS || 60_000),
 };
 
@@ -709,7 +708,14 @@ function isOlderThan(dateValue, minutes) {
 }
 
 function getTrafficPackExpiresAt() {
-  return nowDateWithHoursOffset(config.trafficPackDurationHours);
+  const chinaNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  return new Date(
+    Date.UTC(
+      chinaNow.getUTCFullYear(),
+      chinaNow.getUTCMonth(),
+      chinaNow.getUTCDate() + 1,
+    ) - 8 * 60 * 60 * 1000,
+  );
 }
 
 function getTrafficPackBonus(order) {

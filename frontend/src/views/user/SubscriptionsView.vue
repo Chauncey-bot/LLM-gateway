@@ -97,7 +97,7 @@
                 </span>
                 <span class="text-sm text-gray-500 dark:text-dark-400">
                   ${{ (subscription.daily_usage_usd || 0).toFixed(2) }} / ${{
-                    subscription.group.daily_limit_usd.toFixed(2)
+                    getEffectiveDailyLimit(subscription).toFixed(2)
                   }}
                 </span>
               </div>
@@ -107,13 +107,13 @@
                   :class="
                     getProgressBarClass(
                       subscription.daily_usage_usd,
-                      subscription.group.daily_limit_usd
+                      getEffectiveDailyLimit(subscription)
                     )
                   "
                   :style="{
                     width: getProgressWidth(
                       subscription.daily_usage_usd,
-                      subscription.group.daily_limit_usd
+                      getEffectiveDailyLimit(subscription)
                     )
                   }"
                 ></div>
@@ -128,6 +128,30 @@
                   })
                 }}
               </p>
+              <div
+                v-if="activeTrafficPack"
+                class="rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs text-cyan-900 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-100"
+              >
+                <div class="flex items-center justify-between gap-3 font-medium">
+                  <span>{{ t('userSubscriptions.trafficPack') }}</span>
+                  <span>+${{ activeTrafficPack.bonusQuotaUsd.toFixed(2) }}</span>
+                </div>
+                <p class="mt-1 text-cyan-800/80 dark:text-cyan-100/80">
+                  {{
+                    t('userSubscriptions.trafficPackQuota', {
+                      base: `$${getBaseDailyLimit(subscription).toFixed(2)}`,
+                      total: `$${getEffectiveDailyLimit(subscription).toFixed(2)}`
+                    })
+                  }}
+                </p>
+                <p class="mt-0.5 text-cyan-800/80 dark:text-cyan-100/80">
+                  {{
+                    t('userSubscriptions.trafficPackExpires', {
+                      time: formatTrafficPackExpiry(activeTrafficPack.expiresAt)
+                    })
+                  }}
+                </p>
+              </div>
             </div>
 
             <!-- Weekly Usage -->
@@ -271,6 +295,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import subscriptionsAPI from '@/api/subscriptions'
+import { listPaymentOrders, type PaymentOrder } from '@/api/pay'
 import type { UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -282,6 +307,12 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 
 const subscriptions = ref<UserSubscription[]>([])
+interface ActiveTrafficPack {
+  bonusQuotaUsd: number
+  expiresAt: string
+}
+
+const activeTrafficPack = ref<ActiveTrafficPack | null>(null)
 const activeSubscriptions = computed(() =>
   subscriptions.value.filter((subscription) => {
     if (!subscription.expires_at) {
@@ -315,12 +346,69 @@ async function loadSubscriptions() {
   try {
     loading.value = true
     subscriptions.value = await subscriptionsAPI.getMySubscriptions()
+    try {
+      const { orders } = await listPaymentOrders({
+        pageSize: 200,
+        tradeStatus: 'paid',
+        fulfillmentStatus: 'fulfilled'
+      })
+      activeTrafficPack.value = getActiveTrafficPack(orders)
+    } catch (error) {
+      activeTrafficPack.value = null
+      console.warn('Failed to load traffic pack status:', error)
+    }
   } catch (error) {
     console.error('Failed to load subscriptions:', error)
     appStore.showError(t('userSubscriptions.failedToLoad'))
   } finally {
     loading.value = false
   }
+}
+
+function getActiveTrafficPack(orders: PaymentOrder[]): ActiveTrafficPack | null {
+  const now = Date.now()
+  const activePacks = orders
+    .filter((order) => {
+      const expiresAt = order.trafficPackExpiresAt
+      return (
+        order.skuType === 'traffic' &&
+        order.tradeStatus === 'paid' &&
+        order.fulfillmentStatus === 'fulfilled' &&
+        !order.trafficPackReverted &&
+        Number(order.trafficPackBonusUsd) > 0 &&
+        expiresAt &&
+        new Date(expiresAt).getTime() > now
+      )
+    })
+    .sort(
+      (left, right) =>
+        new Date(right.trafficPackExpiresAt || 0).getTime() -
+        new Date(left.trafficPackExpiresAt || 0).getTime()
+    )
+
+  const pack = activePacks[0]
+  if (!pack?.trafficPackExpiresAt || !pack.trafficPackBonusUsd) return null
+
+  return {
+    bonusQuotaUsd: Number(pack.trafficPackBonusUsd),
+    expiresAt: pack.trafficPackExpiresAt
+  }
+}
+
+function getBaseDailyLimit(subscription: UserSubscription): number {
+  return Number(subscription.group?.daily_limit_usd || 0)
+}
+
+function getEffectiveDailyLimit(subscription: UserSubscription): number {
+  return getBaseDailyLimit(subscription) + (activeTrafficPack.value?.bonusQuotaUsd || 0)
+}
+
+function formatTrafficPackExpiry(expiresAt: string): string {
+  return formatDateTime(new Date(expiresAt), {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  })
 }
 
 function getProgressWidth(used: number | undefined, limit: number | null | undefined): string {
