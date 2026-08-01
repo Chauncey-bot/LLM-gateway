@@ -213,13 +213,11 @@
                   :title="t('keys.clickToChangeGroup')"
                 >
                   <span v-if="row.group" class="api-key-group-badge">
-                    <GroupBadge
-                      :name="row.group.name"
-                      :platform="row.group.platform"
-                      :subscription-type="row.group.subscription_type"
-                      :rate-multiplier="row.group.rate_multiplier"
-                      :user-rate-multiplier="userGroupRates[row.group.id]"
-                    />
+                  <GroupBadge
+                    :name="row.group.name"
+                    :platform="row.group.platform"
+                    :subscription-type="row.group.subscription_type"
+                  />
                   </span>
                   <span v-else class="text-sm text-gray-400 dark:text-dark-500">{{ t('keys.noGroup') }}</span>
                   <Icon name="chevronDown" size="xs" class="shrink-0 text-gray-400" />
@@ -351,8 +349,6 @@
                   :name="row.group.name"
                   :platform="row.group.platform"
                   :subscription-type="row.group.subscription_type"
-                  :rate-multiplier="row.group.rate_multiplier"
-                  :user-rate-multiplier="userGroupRates[row.group.id]"
                 />
                 <span v-else class="text-sm text-gray-400 dark:text-dark-500">{{
                   t('keys.noGroup')
@@ -659,8 +655,6 @@
                 :name="(option as unknown as GroupOption).label"
                 :platform="(option as unknown as GroupOption).platform"
                 :subscription-type="(option as unknown as GroupOption).subscriptionType"
-                :rate-multiplier="(option as unknown as GroupOption).rate"
-                :user-rate-multiplier="(option as unknown as GroupOption).userRate"
               />
               <span v-else class="text-gray-400">{{ t('keys.selectGroup') }}</span>
             </template>
@@ -669,8 +663,7 @@
                 :name="(option as unknown as GroupOption).label"
                 :platform="(option as unknown as GroupOption).platform"
                 :subscription-type="(option as unknown as GroupOption).subscriptionType"
-                :rate-multiplier="(option as unknown as GroupOption).rate"
-                :user-rate-multiplier="(option as unknown as GroupOption).userRate"
+                :show-rate="false"
                 :description="(option as unknown as GroupOption).description"
                 :selected="selected"
               />
@@ -1215,8 +1208,7 @@
               :name="option.label"
               :platform="option.platform"
               :subscription-type="option.subscriptionType"
-              :rate-multiplier="option.rate"
-              :user-rate-multiplier="option.userRate"
+              :show-rate="false"
               :description="option.description"
               :selected="
                 selectedKeyForGroup?.group_id === option.value ||
@@ -1273,8 +1265,6 @@ interface GroupOption {
   value: number
   label: string
   description: string | null
-  rate: number
-  userRate: number | null
   subscriptionType: SubscriptionType
   platform: GroupPlatform
 }
@@ -1306,7 +1296,6 @@ const batchTargetGroupId = ref(-1)
 const now = ref(new Date())
 let resetTimer: ReturnType<typeof setInterval> | null = null
 const usageStats = ref<Record<string, BatchApiKeyUsageStats>>({})
-const userGroupRates = ref<Record<number, number>>({})
 const activeSubscriptionGroupIds = ref<Set<number>>(new Set())
 
 const pagination = ref({
@@ -1405,14 +1394,12 @@ const selectableGroups = computed(() =>
   groups.value.filter((group) => activeSubscriptionGroupIds.value.has(group.id))
 )
 
-// Convert groups to Select options format with rate multiplier and subscription type
+// Convert groups to Select options format
 const groupOptions = computed(() =>
   selectableGroups.value.map((group) => ({
     value: group.id,
     label: group.name,
     description: group.description,
-    rate: group.rate_multiplier,
-    userRate: userGroupRates.value[group.id] ?? null,
     subscriptionType: group.subscription_type,
     platform: group.platform
   }))
@@ -1538,14 +1525,6 @@ const loadActiveSubscriptions = async () => {
   } catch (error) {
     activeSubscriptionGroupIds.value = new Set()
     console.error('Failed to load active subscriptions:', error)
-  }
-}
-
-const loadUserGroupRates = async () => {
-  try {
-    userGroupRates.value = await userGroupsAPI.getUserGroupRates()
-  } catch (error) {
-    console.error('Failed to load user group rates:', error)
   }
 }
 
@@ -1839,17 +1818,27 @@ const normalizeNumber = (value: unknown): number => {
 }
 
 const getTodayActualCost = (row: ApiKey): number => {
-  const fromStats = usageStats.value[row.id]?.today_actual_cost
-  if (fromStats != null) {
-    return normalizeNumber(fromStats)
+  const fromStats = usageStats.value[row.id] as
+    | { today_actual_cost?: number; today_cost?: number }
+    | undefined
+  if (fromStats?.today_actual_cost != null) {
+    return normalizeNumber(fromStats.today_actual_cost)
+  }
+  if (fromStats?.today_cost != null) {
+    return normalizeNumber(fromStats.today_cost)
   }
   return normalizeNumber(row.usage_1d)
 }
 
 const getTotalActualCost = (row: ApiKey): number => {
-  const fromStats = usageStats.value[row.id]?.total_actual_cost
-  if (fromStats != null) {
-    return normalizeNumber(fromStats)
+  const fromStats = usageStats.value[row.id] as
+    | { total_actual_cost?: number; total_cost?: number }
+    | undefined
+  if (fromStats?.total_actual_cost != null) {
+    return normalizeNumber(fromStats.total_actual_cost)
+  }
+  if (fromStats?.total_cost != null) {
+    return normalizeNumber(fromStats.total_cost)
   }
   return normalizeNumber(row.quota_used)
 }
@@ -2162,7 +2151,6 @@ onMounted(() => {
   loadApiKeys()
   loadGroups()
   loadActiveSubscriptions()
-  loadUserGroupRates()
   loadPublicSettings()
   document.addEventListener('click', closeGroupSelector)
   resetTimer = setInterval(() => { now.value = new Date() }, 60000)
