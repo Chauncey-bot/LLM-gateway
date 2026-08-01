@@ -59,6 +59,32 @@ const paymentPollIntervalMs = Number(process.env.PAYMENT_POLL_INTERVAL_MS || 60_
 let paymentPollTimer = null;
 let trafficPackReclaimTimer = null;
 
+const corsAllowedOrigins = new Set([
+  "https://ai.zhisales.com",
+  "https://www.zhisales.com",
+]);
+
+app.use((req, res, next) => {
+  const origin = req.get("origin");
+  if (!origin || !corsAllowedOrigins.has(origin)) {
+    return next();
+  }
+
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Authorization, Content-Type, Accept-Language",
+  );
+  res.setHeader("Vary", "Origin");
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+
+  return next();
+});
+
 app.use(express.json({ limit: "512kb" }));
 app.use(express.urlencoded({ extended: false, limit: "512kb" }));
 
