@@ -470,7 +470,6 @@ const userNavItems = computed((): NavItem[] => {
           }
         ]
       : []),
-    { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true },
     { path: '/referrals', label: t('nav.referrals'), icon: ReferralIcon, hideInSimpleMode: true },
     { path: '/points-mall', label: t('nav.pointsMall'), icon: GiftIcon, hideInSimpleMode: true },
     { path: '/profile', label: t('nav.profile'), icon: UserIcon },
@@ -504,7 +503,6 @@ const personalNavItems = computed((): NavItem[] => {
           }
         ]
       : []),
-    { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true },
     { path: '/referrals', label: t('nav.referrals'), icon: ReferralIcon, hideInSimpleMode: true },
     { path: '/points-mall', label: t('nav.pointsMall'), icon: GiftIcon, hideInSimpleMode: true },
     { path: '/profile', label: t('nav.profile'), icon: UserIcon },
