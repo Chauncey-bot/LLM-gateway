@@ -30,11 +30,11 @@
         <!-- Admin Section -->
         <div class="sidebar-section">
           <router-link
-            v-for="item in adminNavItems"
-            :key="item.path"
-            :to="item.path"
+            v-for="(item, index) in adminNavItems"
+            :key="`${item.path}-${index}`"
+            :to="resolveMenuPath(item)"
             class="sidebar-link mb-1"
-            :class="{ 'sidebar-link-active': isActive(item.path) }"
+            :class="{ 'sidebar-link-active': isActive(resolveMenuPath(item)) }"
             :title="sidebarCollapsed ? item.label : undefined"
             :id="
               item.path === '/admin/accounts'
@@ -45,7 +45,7 @@
                     ? 'sidebar-wallet'
                     : undefined
             "
-            @click="handleMenuItemClick(item.path)"
+            @click="handleMenuItemClick(resolveMenuPath(item))"
           >
             <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
             <component v-else :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -63,14 +63,14 @@
           <div v-else class="mx-3 my-3 h-px bg-slate-200 dark:bg-white/10"></div>
 
           <router-link
-            v-for="item in personalNavItems"
-            :key="item.path"
-            :to="item.path"
+            v-for="(item, index) in personalNavItems"
+            :key="`${item.path}-${index}`"
+            :to="resolveMenuPath(item)"
             class="sidebar-link mb-1"
-            :class="{ 'sidebar-link-active': isActive(item.path) }"
+            :class="{ 'sidebar-link-active': isActive(resolveMenuPath(item)) }"
             :title="sidebarCollapsed ? item.label : undefined"
             :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : undefined"
-            @click="handleMenuItemClick(item.path)"
+            @click="handleMenuItemClick(resolveMenuPath(item))"
           >
             <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
             <component v-else :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -85,14 +85,14 @@
       <template v-else-if="!appStore.backendModeEnabled">
         <div class="sidebar-section">
           <router-link
-            v-for="item in userNavItems"
-            :key="item.path"
-            :to="item.path"
+            v-for="(item, index) in userNavItems"
+            :key="`${item.path}-${index}`"
+            :to="resolveMenuPath(item)"
             class="sidebar-link mb-1"
-            :class="{ 'sidebar-link-active': isActive(item.path) }"
+            :class="{ 'sidebar-link-active': isActive(resolveMenuPath(item)) }"
             :title="sidebarCollapsed ? item.label : undefined"
             :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : undefined"
-            @click="handleMenuItemClick(item.path)"
+            @click="handleMenuItemClick(resolveMenuPath(item))"
           >
             <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
             <component v-else :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -604,6 +604,100 @@ function handleMenuItemClick(itemPath: string) {
   if (selector && onboardingStore.isCurrentStep(selector)) {
     onboardingStore.nextStep(500)
   }
+}
+
+/**
+ * 如果菜单路径异常，尝试按文案回退到对应菜单，避免菜单全部错误跳转。
+ */
+const knownMenuPaths = computed<Record<string, string>>(() =>
+  isAdmin.value
+    ? {
+        [t('nav.dashboard')]: '/admin/dashboard',
+        [t('nav.ops')]: '/admin/ops',
+        [t('nav.users')]: '/admin/users',
+        [t('nav.groups')]: '/admin/groups',
+        [t('nav.subscriptions')]: '/admin/subscriptions',
+        [t('nav.orders')]: '/admin/orders',
+        [t('nav.accounts')]: '/admin/accounts',
+        [t('nav.announcements')]: '/admin/announcements',
+        [t('nav.proxies')]: '/admin/proxies',
+        [t('nav.redeemCodes')]: '/admin/redeem',
+        [t('nav.promoCodes')]: '/admin/promo-codes',
+        [t('nav.usage')]: '/admin/usage',
+        [t('nav.profile')]: '/profile',
+        [t('nav.settings')]: '/admin/settings',
+        [t('nav.apiKeys')]: '/keys'
+      }
+    : {
+        [t('nav.dashboard')]: '/dashboard',
+        [t('nav.apiKeys')]: '/keys',
+        [t('nav.usage')]: '/usage',
+        [t('nav.mySubscriptions')]: '/subscriptions',
+        [t('nav.orders')]: '/orders',
+        [t('nav.referrals')]: '/referrals',
+        [t('nav.pointsMall')]: '/points-mall',
+        [t('nav.profile')]: '/profile',
+        [t('nav.sora')]: '/sora',
+        [t('nav.buySubscription')]: '/purchase'
+      }
+)
+
+const menuPathWhitelist = computed<Set<string>>(() =>
+  isAdmin.value
+    ? new Set([
+        '/admin/dashboard',
+        '/admin/ops',
+        '/admin/users',
+        '/admin/groups',
+        '/admin/subscriptions',
+        '/admin/orders',
+        '/admin/accounts',
+        '/admin/announcements',
+        '/admin/proxies',
+        '/admin/redeem',
+        '/admin/promo-codes',
+        '/admin/usage',
+        '/admin/settings',
+        '/keys',
+        '/profile',
+        '/custom'
+      ])
+    : new Set([
+        '/dashboard',
+        '/keys',
+        '/usage',
+        '/subscriptions',
+        '/orders',
+        '/referrals',
+        '/points-mall',
+        '/profile',
+        '/sora',
+        '/purchase',
+        '/redeem',
+        '/custom'
+      ])
+)
+
+function resolveMenuPath(item: NavItem): string {
+  const rawPath = (item.path || '').trim()
+  const fallbackPath = knownMenuPaths.value[item.label] || (isAdmin.value ? '/admin/dashboard' : '/dashboard')
+
+  if (!rawPath) {
+    return fallbackPath
+  }
+  if (rawPath.startsWith('/custom/')) {
+    return rawPath
+  }
+  if (rawPath.startsWith('http://') || rawPath.startsWith('https://')) {
+    return fallbackPath
+  }
+  if (rawPath === '/keys' && fallbackPath !== '/keys') {
+    return fallbackPath
+  }
+  if (rawPath.startsWith('/') && menuPathWhitelist.value.has(rawPath)) {
+    return rawPath
+  }
+  return fallbackPath
 }
 
 function isActive(path: string): boolean {
