@@ -135,6 +135,26 @@ Static home:
 
 - `/var/www/zhisales-site`
 
+### Static frontend release procedure
+
+The frontend uses Vite hashed chunks. Always deploy the **entire** build output,
+not just `index.html` or one JavaScript file; otherwise the live entrypoint can
+refer to a missing chunk and browsers will show a blank page with a module MIME
+error.
+
+From this repository, build the frontend and deploy the output with:
+
+```bash
+cd frontend
+npm run build
+cd ..
+SSH_PRIVATE_KEY=/path/to/production.pem ./scripts/deploy-frontend-static.sh
+```
+
+The script uploads `backend/internal/web/dist` as a complete bundle and checks
+that every local build file exists on the server afterward. It intentionally
+does not delete unrelated files already present in the static-site directory.
+
 Docs site:
 
 - `/var/www/doc-zhisales`
