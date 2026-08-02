@@ -15,6 +15,7 @@
 
 - `PORT`（默认 `3000`）
 - `SUB2API_BASE_URL`（默认 `http://host.docker.internal:18080`）
+- `PAY_SERVICE_BASE_URL`（默认与 `SUB2API_BASE_URL` 一致，用于调用支付服务 `reset-traffic-packs` 管理接口）
 - `SUB2API_ADMIN_EMAIL`（获取 admin token 所需）
 - `SUB2API_ADMIN_PASSWORD`（获取 admin token 所需）
 - `MINIMUM_REMAINING_HOURS`（默认 `24`）

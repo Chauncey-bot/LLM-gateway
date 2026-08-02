@@ -11,6 +11,9 @@ const rawMinimumHours = Number(process.env.MINIMUM_REMAINING_HOURS);
 const config = {
   port: Number(process.env.PORT) || 3000,
   sub2apiBaseUrl: (process.env.SUB2API_BASE_URL || "http://host.docker.internal:18080").replace(/\/+$/, ""),
+  payServiceBaseUrl: (process.env.PAY_SERVICE_BASE_URL || process.env.SUB2API_BASE_URL || "http://host.docker.internal:18080").replace(/\/+$/, ""),
+  sub2apiAdminEmail: process.env.SUB2API_ADMIN_EMAIL || "",
+  sub2apiAdminPassword: process.env.SUB2API_ADMIN_PASSWORD || "",
   db: {
     host: process.env.DB_HOST || "sub2api-postgres",
     port: Number(process.env.DB_PORT || 5432),
@@ -19,6 +22,11 @@ const config = {
     password: process.env.DB_PASSWORD || "",
   },
   minimumRemainingHours: Number.isFinite(rawMinimumHours) && rawMinimumHours > 0 ? rawMinimumHours : MINIMUM_REMAINING_HOURS,
+};
+
+const payServiceAdminSession = {
+  token: null,
+  expiresAt: 0,
 };
 
 const app = express();
@@ -59,6 +67,84 @@ function readBearerToken(req) {
     return "";
   }
   return auth.slice(7).trim();
+}
+
+async function payServiceJson(pathname, options = {}) {
+  const response = await fetch(`${config.payServiceBaseUrl}${pathname}`, {
+    method: options.method || "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  const text = await response.text();
+  let body;
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    body = { raw: text || "" };
+  }
+
+  if (!response.ok) {
+    const detail =
+      (body && typeof body === "object" && (body.message || body.error)) ||
+      text ||
+      `HTTP ${response.status}`;
+    throw new ServiceError(response.status, `pay service request failed (${response.status}): ${detail}`, "UPSTREAM_ERROR");
+  }
+
+  if (body && typeof body === "object" && Object.prototype.hasOwnProperty.call(body, "code")) {
+    if (typeof body.code === "number" && body.code !== 0) {
+      throw new ServiceError(response.status, body.message || "pay service business error", `UPSTREAM_CODE_${body.code}`);
+    }
+    if (typeof body.code !== "number" && body.code !== 0) {
+      return body;
+    }
+  }
+
+  if (body && Object.prototype.hasOwnProperty.call(body, "data")) {
+    return body.data;
+  }
+  return body;
+}
+
+async function getPayServiceAdminToken() {
+  const now = Date.now();
+  if (payServiceAdminSession.token && now < payServiceAdminSession.expiresAt - 60_000) {
+    return payServiceAdminSession.token;
+  }
+  if (!config.sub2apiAdminEmail || !config.sub2apiAdminPassword) {
+    throw new ServiceError(500, "Missing sub2api admin credentials", "MISSING_ADMIN_CREDENTIALS");
+  }
+  const data = await payServiceJson("/api/v1/auth/login", {
+    method: "POST",
+    body: {
+      email: config.sub2apiAdminEmail,
+      password: config.sub2apiAdminPassword,
+    },
+  });
+  payServiceAdminSession.token = data.access_token;
+  payServiceAdminSession.expiresAt = now + Number(data.expires_in || 3600) * 1000;
+  return payServiceAdminSession.token;
+}
+
+async function payServiceAdminJson(pathname, options = {}) {
+  const token = await getPayServiceAdminToken();
+  return payServiceJson(pathname, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+async function resetActiveTrafficPacksForUser(userId) {
+  return payServiceAdminJson(`/pay-api/admin/users/${Number(userId)}/reset-traffic-packs`, {
+    method: "POST",
+  });
 }
 
 function normalizeResetWindowRequest(body) {
@@ -184,6 +270,9 @@ async function resetQuotaAndShortenSubscription(subscriptionId, userId, resetReq
        RETURNING id, user_id, status, expires_at, daily_usage_usd, weekly_usage_usd, monthly_usage_usd`,
       [subscriptionId, resetRequest.daily, resetRequest.weekly, resetRequest.monthly]
     );
+    if (resetRequest.daily) {
+      await resetActiveTrafficPacksForUser(Number(subscription.user_id));
+    }
     await client.query("COMMIT");
     return updated.rows[0];
   } catch (error) {
