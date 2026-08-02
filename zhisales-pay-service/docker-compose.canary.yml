@@ -1,0 +1,24 @@
+services:
+  zhisales-pay-canary:
+    image: zhisales-pay-service:canary
+    container_name: zhisales-pay-canary
+    restart: unless-stopped
+    env_file:
+      - .env.canary
+    ports:
+      - "${CANARY_PORT:-18195}:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./catalog.json:/app/catalog.json
+    networks:
+      - sub2api-net
+      - sub2api-db-net
+
+networks:
+  sub2api-net:
+    external: true
+    name: ${CANARY_NETWORK:-sub2api-v01104-official_sub2api-network}
+  sub2api-db-net:
+    external: true
+    name: sub2api_sub2api-network

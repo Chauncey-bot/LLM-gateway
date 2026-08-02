@@ -7,6 +7,24 @@
         <p class="console-section-description">{{ t('userSubscriptions.description') }}</p>
       </div>
 
+      <div
+        v-if="!loading && dailyQuota !== null"
+        class="rounded-2xl border border-cyan-200 bg-cyan-50 px-5 py-4 text-cyan-950 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-50"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <p class="text-sm font-semibold">{{ t('userSubscriptions.trafficQuotaBonus') }}</p>
+            <p class="mt-1 text-xs text-cyan-800/80 dark:text-cyan-100/80">
+              {{ t('userSubscriptions.trafficPack') }}
+            </p>
+          </div>
+          <strong class="text-2xl tabular-nums">+${{ dailyQuota.toFixed(2) }}</strong>
+        </div>
+        <p v-if="dailyQuotaExpiresAt" class="mt-2 text-xs text-cyan-800/80 dark:text-cyan-100/80">
+          {{ t('userSubscriptions.trafficPackExpires', { time: formatTrafficPackExpiry(dailyQuotaExpiresAt) }) }}
+        </p>
+      </div>
+
       <!-- Loading State -->
       <div v-if="loading" class="flex justify-center py-12">
         <div
@@ -123,8 +141,8 @@
                 class="text-xs text-gray-500 dark:text-dark-400"
               >
                 {{
-                  t('userSubscriptions.resetIn', {
-                    time: formatResetTime(subscription.daily_window_start, 24)
+                  t('userSubscriptions.subscriptionQuotaReset', {
+                    time: formatTimeUntilNextMidnight()
                   })
                 }}
               </p>
@@ -295,7 +313,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import subscriptionsAPI from '@/api/subscriptions'
-import { listPaymentOrders, type PaymentOrder } from '@/api/pay'
+import { getPaymentDailyQuota, listPaymentOrders, type PaymentOrder } from '@/api/pay'
 import type { UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -313,6 +331,8 @@ interface ActiveTrafficPack {
 }
 
 const activeTrafficPack = ref<ActiveTrafficPack | null>(null)
+const dailyQuota = ref<number | null>(null)
+const dailyQuotaExpiresAt = ref<string | null>(null)
 const activeSubscriptions = computed(() =>
   subscriptions.value.filter((subscription) => {
     if (!subscription.expires_at) {
@@ -347,14 +367,21 @@ async function loadSubscriptions() {
     loading.value = true
     subscriptions.value = await subscriptionsAPI.getMySubscriptions()
     try {
-      const { orders } = await listPaymentOrders({
-        pageSize: 200,
-        tradeStatus: 'paid',
-        fulfillmentStatus: 'fulfilled'
-      })
+      const [{ orders }, quota] = await Promise.all([
+        listPaymentOrders({
+          pageSize: 200,
+          tradeStatus: 'paid',
+          fulfillmentStatus: 'fulfilled'
+        }),
+        getPaymentDailyQuota()
+      ])
       activeTrafficPack.value = getActiveTrafficPack(orders)
+      dailyQuota.value = Number(quota.quotaDailyLimit)
+      dailyQuotaExpiresAt.value = quota.trafficPackExpiresAt
     } catch (error) {
       activeTrafficPack.value = null
+      dailyQuota.value = null
+      dailyQuotaExpiresAt.value = null
       console.warn('Failed to load traffic pack status:', error)
     }
   } catch (error) {
@@ -387,10 +414,13 @@ function getActiveTrafficPack(orders: PaymentOrder[]): ActiveTrafficPack | null 
     )
 
   const pack = activePacks[0]
-  if (!pack?.trafficPackExpiresAt || !pack.trafficPackBonusUsd) return null
+  if (!pack?.trafficPackExpiresAt) return null
 
   return {
-    bonusQuotaUsd: Number(pack.trafficPackBonusUsd),
+    bonusQuotaUsd: activePacks.reduce(
+      (total, order) => total + Number(order.trafficPackBonusUsd || 0),
+      0
+    ),
     expiresAt: pack.trafficPackExpiresAt
   }
 }
@@ -400,7 +430,18 @@ function getBaseDailyLimit(subscription: UserSubscription): number {
 }
 
 function getEffectiveDailyLimit(subscription: UserSubscription): number {
-  return getBaseDailyLimit(subscription) + (activeTrafficPack.value?.bonusQuotaUsd || 0)
+  const trafficQuotaBonus = dailyQuota.value ?? activeTrafficPack.value?.bonusQuotaUsd ?? 0
+  return getBaseDailyLimit(subscription) + trafficQuotaBonus
+}
+
+function formatTimeUntilNextMidnight(): string {
+  const now = new Date()
+  const nextMidnight = new Date(now)
+  nextMidnight.setHours(24, 0, 0, 0)
+  const remainingMinutes = Math.max(0, Math.ceil((nextMidnight.getTime() - now.getTime()) / 60_000))
+  const hours = Math.floor(remainingMinutes / 60)
+  const minutes = remainingMinutes % 60
+  return `${hours}h ${minutes}m`
 }
 
 function formatTrafficPackExpiry(expiresAt: string): string {

@@ -377,6 +377,14 @@ async function initDb() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_payment_orders_user_id ON payment_orders(user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_payment_orders_trade_status ON payment_orders(trade_status);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_extensions (
+      user_id BIGINT PRIMARY KEY,
+      quota_daily_limit NUMERIC(20,8) NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS user_username TEXT;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS raw_notify_response JSONB;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS notify_received_at TIMESTAMPTZ;`);
@@ -749,42 +757,106 @@ function getTrafficPackBonus(order) {
   return bonus !== null ? bonus : 0;
 }
 
-async function hasActiveTrafficPackForUser(client, userId, options = {}) {
-  const rows = await client.query(
+export function calculateTrafficPackQuota({ currentDailyLimit, activePackBaseDailyQuota, bonusQuotaUsd }) {
+  if (!Number.isFinite(currentDailyLimit) || currentDailyLimit < 0) {
+    throw new Error("User does not have a finite current daily quota limit");
+  }
+  if (!Number.isFinite(bonusQuotaUsd) || bonusQuotaUsd <= 0) {
+    throw new Error("Traffic pack quota bonus must be positive");
+  }
+
+  return {
+    baseDailyQuota: activePackBaseDailyQuota ?? currentDailyLimit,
+    newDailyLimit: currentDailyLimit + bonusQuotaUsd,
+  };
+}
+
+async function getUserDailyQuotaExtensionForUpdate(client, userId) {
+  await client.query(
     `
-    SELECT 1
+    INSERT INTO user_extensions (user_id)
+    VALUES ($1)
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [Number(userId)],
+  );
+  const { rows } = await client.query(
+    `
+    SELECT quota_daily_limit
+    FROM user_extensions
+    WHERE user_id = $1
+    FOR UPDATE
+    `,
+    [Number(userId)],
+  );
+  const quotaDailyLimit = rows.length ? parseDecimalNumber(rows[0].quota_daily_limit) : null;
+  if (quotaDailyLimit === null || quotaDailyLimit < 0) {
+    throw new Error(`Invalid user daily quota extension for user ${userId}`);
+  }
+  return quotaDailyLimit;
+}
+
+async function setUserDailyQuotaExtension(client, userId, quotaDailyLimit) {
+  await client.query(
+    `
+    UPDATE user_extensions
+    SET quota_daily_limit = $2,
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [Number(userId), quotaDailyLimit],
+  );
+}
+
+async function getUserDailyQuotaExtension(client, userId) {
+  const { rows } = await client.query(
+    `
+    SELECT quota_daily_limit
+    FROM user_extensions
+    WHERE user_id = $1
+    `,
+    [Number(userId)],
+  );
+  return rows.length ? parseDecimalNumber(rows[0].quota_daily_limit) ?? 0 : 0;
+}
+
+async function upsertUserDailyQuotaExtension(client, userId, quotaDailyLimit) {
+  await client.query(
+    `
+    INSERT INTO user_extensions (user_id, quota_daily_limit)
+    VALUES ($1, $2)
+    ON CONFLICT (user_id) DO UPDATE
+    SET quota_daily_limit = EXCLUDED.quota_daily_limit,
+        updated_at = NOW()
+    `,
+    [Number(userId), quotaDailyLimit],
+  );
+}
+
+async function lockTrafficPackUser(client, userId) {
+  // A user can complete payments through notify, polling, or a manual retry at
+  // the same time. Serialize the read-modify-write quota update across all of
+  // those paths so every paid pack contributes its full bonus.
+  await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [Number(userId)]);
+}
+
+async function getActiveTrafficPackBaseDailyQuota(client, userId) {
+  const { rows } = await client.query(
+    `
+    SELECT traffic_pack_base_daily_quota_usd
     FROM payment_orders
     WHERE user_id = $1
       AND sku_type = 'traffic'
-      AND (
-        (fulfillment_status = 'pending' AND trade_status IN ('created', 'pending', 'paid'))
-        OR (
-          fulfillment_status = 'fulfilled'
-          AND COALESCE(traffic_pack_reverted, false) = false
-          AND traffic_pack_expires_at > NOW()
-        )
-      )
-      AND ($2::text IS NULL OR merchant_order_id <> $2)
+      AND fulfillment_status = 'fulfilled'
+      AND COALESCE(traffic_pack_reverted, false) = false
+      AND traffic_pack_expires_at > NOW()
+    ORDER BY traffic_pack_applied_at ASC NULLS LAST, id ASC
     LIMIT 1
+    FOR UPDATE
     `,
-    [Number(userId), options.excludeMerchantOrderId || null],
+    [Number(userId)],
   );
-  return rows.rows.length > 0;
-}
-
-function buildQuotaDailyLimitRestorePayload(limit) {
-  const parsed = parseDecimalNumber(limit);
-  if (parsed === null) {
-    return { quota_daily_limit: null };
-  }
-  return { quota_daily_limit: parsed };
-}
-
-async function ensureNoActiveTrafficPack(userId, client, excludeMerchantOrderId) {
-  const hasActive = await hasActiveTrafficPackForUser(client, userId, { excludeMerchantOrderId });
-  if (hasActive) {
-    throw new Error("An active traffic pack already exists for this user");
-  }
+  return rows.length ? parseDecimalNumber(rows[0].traffic_pack_base_daily_quota_usd) : null;
 }
 
 async function queryTrade(order) {
@@ -867,20 +939,22 @@ async function applyTrafficPackOrder(order, client) {
     throw new Error(`Invalid traffic pack quota bonus for order ${order.merchant_order_id}`);
   }
 
-  await ensureNoActiveTrafficPack(order.user_id, client, order.merchant_order_id);
+  await lockTrafficPackUser(client, order.user_id);
+  await reclaimExpiredTrafficPacksForUser(client, order.user_id);
 
-  const user = await getAdminUserById(order.user_id);
-  const currentDailyLimit = parseDecimalNumber(user.quota_daily_limit);
-  if (!Number.isFinite(currentDailyLimit) || currentDailyLimit <= 0) {
-    throw new Error(`User ${order.user_id} does not have a finite current daily quota limit`);
-  }
-
-  const newDailyLimit = currentDailyLimit + bonusQuotaUsd;
+  // All packs bought on a given day share the first pack's baseline. This
+  // lets their bonuses stack now while allowing a single correct reset at the
+  // next China midnight.
+  const currentDailyLimit = await getUserDailyQuotaExtensionForUpdate(client, order.user_id);
+  const activePackBaseDailyQuota = await getActiveTrafficPackBaseDailyQuota(client, order.user_id);
+  const { baseDailyQuota, newDailyLimit } = calculateTrafficPackQuota({
+    currentDailyLimit,
+    activePackBaseDailyQuota,
+    bonusQuotaUsd,
+  });
   const expiresAt = getTrafficPackExpiresAt();
 
-  await updateAdminUserQuotaDailyLimit(order.user_id, {
-    quota_daily_limit: newDailyLimit,
-  });
+  await setUserDailyQuotaExtension(client, order.user_id, newDailyLimit);
 
   const update = await client.query(
     `
@@ -899,11 +973,90 @@ async function applyTrafficPackOrder(order, client) {
     [
       order.merchant_order_id,
       bonusQuotaUsd,
-      currentDailyLimit,
+      baseDailyQuota,
       expiresAt,
     ],
   );
   return update.rows[0];
+}
+
+async function reclaimExpiredTrafficPacksForUser(client, userId) {
+  const { rows } = await client.query(
+    `
+    SELECT *
+    FROM payment_orders
+    WHERE user_id = $1
+      AND sku_type = 'traffic'
+      AND fulfillment_status = 'fulfilled'
+      AND COALESCE(traffic_pack_reverted, false) = false
+      AND traffic_pack_expires_at IS NOT NULL
+      AND traffic_pack_expires_at <= NOW()
+    ORDER BY traffic_pack_applied_at ASC NULLS LAST, id ASC
+    FOR UPDATE
+    `,
+    [Number(userId)],
+  );
+  if (!rows.length) {
+    return { scanned: 0, reclaimed: 0 };
+  }
+
+  const baseDailyQuota = parseDecimalNumber(rows[0].traffic_pack_base_daily_quota_usd);
+  if (baseDailyQuota === null) {
+    const errorMessage = `Traffic pack baseline is missing for user ${userId}`;
+    await client.query(
+      `
+      UPDATE payment_orders
+      SET traffic_pack_revert_error = $2,
+          updated_at = NOW()
+      WHERE user_id = $1
+        AND sku_type = 'traffic'
+        AND fulfillment_status = 'fulfilled'
+        AND COALESCE(traffic_pack_reverted, false) = false
+        AND traffic_pack_expires_at IS NOT NULL
+        AND traffic_pack_expires_at <= NOW()
+      `,
+      [Number(userId), errorMessage],
+    );
+    throw new Error(errorMessage);
+  }
+
+  try {
+    await setUserDailyQuotaExtension(client, userId, baseDailyQuota);
+    await client.query(
+      `
+      UPDATE payment_orders
+      SET traffic_pack_reverted = true,
+          traffic_pack_reverted_at = NOW(),
+          traffic_pack_revert_error = NULL,
+          updated_at = NOW()
+      WHERE user_id = $1
+        AND sku_type = 'traffic'
+        AND fulfillment_status = 'fulfilled'
+        AND COALESCE(traffic_pack_reverted, false) = false
+        AND traffic_pack_expires_at IS NOT NULL
+        AND traffic_pack_expires_at <= NOW()
+      `,
+      [Number(userId)],
+    );
+    return { scanned: rows.length, reclaimed: rows.length };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    await client.query(
+      `
+      UPDATE payment_orders
+      SET traffic_pack_revert_error = $2,
+          updated_at = NOW()
+      WHERE user_id = $1
+        AND sku_type = 'traffic'
+        AND fulfillment_status = 'fulfilled'
+        AND COALESCE(traffic_pack_reverted, false) = false
+        AND traffic_pack_expires_at IS NOT NULL
+        AND traffic_pack_expires_at <= NOW()
+      `,
+      [Number(userId), errorMessage],
+    );
+    throw error;
+  }
 }
 
 async function reconcileExpiredTrafficPacks(limit = 20) {
@@ -913,56 +1066,33 @@ async function reconcileExpiredTrafficPacks(limit = 20) {
 
   try {
     await client.query("BEGIN");
-    const { rows } = await client.query(
+    const { rows: userRows } = await client.query(
       `
-      SELECT *
+      SELECT DISTINCT user_id
       FROM payment_orders
       WHERE sku_type = 'traffic'
         AND fulfillment_status = 'fulfilled'
         AND COALESCE(traffic_pack_reverted, false) = false
         AND traffic_pack_expires_at IS NOT NULL
         AND traffic_pack_expires_at <= NOW()
-      ORDER BY traffic_pack_expires_at ASC
+      ORDER BY user_id ASC
       LIMIT $1
-      FOR UPDATE SKIP LOCKED
       `,
       [limit],
     );
 
-    for (const row of rows) {
-      const restoreAt = parseDecimalNumber(row.traffic_pack_base_daily_quota_usd);
-      const payload = buildQuotaDailyLimitRestorePayload(restoreAt);
-
+    for (const row of userRows) {
       try {
-        await updateAdminUserQuotaDailyLimit(row.user_id, payload);
-        await client.query(
-          `
-          UPDATE payment_orders
-          SET traffic_pack_reverted = true,
-              traffic_pack_reverted_at = NOW(),
-              traffic_pack_revert_error = NULL,
-              updated_at = NOW()
-          WHERE merchant_order_id = $1
-          `,
-          [row.merchant_order_id],
-        );
-        reclaimed += 1;
+        await lockTrafficPackUser(client, row.user_id);
+        const result = await reclaimExpiredTrafficPacksForUser(client, row.user_id);
+        reclaimed += result.reclaimed;
       } catch (error) {
-        await client.query(
-          `
-          UPDATE payment_orders
-          SET traffic_pack_revert_error = $2,
-              updated_at = NOW()
-          WHERE merchant_order_id = $1
-          `,
-          [row.merchant_order_id, error instanceof Error ? error.message : String(error)],
-        );
         failed += 1;
       }
     }
 
     await client.query("COMMIT");
-    return { scanned: rows.length, reclaimed, failed, skipped: false };
+    return { scanned: userRows.length, reclaimed, failed, skipped: false };
   } catch (error) {
     try {
       await client.query("ROLLBACK");
@@ -1188,9 +1318,16 @@ function html(mode) {
       .btn.secondary { background:transparent; color:var(--text); border:1px solid var(--line); }
       .btn:disabled { opacity:.55; cursor:not-allowed; }
       .empty { padding:24px; border-radius:18px; border:1px dashed var(--line); color:var(--muted); background:var(--card); }
-      .return-box { max-width:720px; }
+      .return-box { max-width:none; display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,440px); align-items:start; gap:28px; padding:28px; }
+      .return-order { display:flex; min-height:190px; flex-direction:column; align-items:flex-start; justify-content:center; gap:10px; }
+      .return-order .label { color:var(--muted); font-size:13px; }
+      .return-order .order-id { font-size:18px; line-height:1.45; }
+      .return-order p { margin:0; max-width:460px; line-height:1.6; }
+      .return-console { display:inline-flex; align-items:center; justify-content:center; width:max-content; margin-top:10px; text-decoration:none; }
+      .return-box .status-grid { grid-template-columns:repeat(2,minmax(0,1fr)); margin:0; }
+      .return-box .status-chip:last-child:nth-child(odd) { grid-column:1 / -1; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break:break-all; }
-      @media (max-width: 720px) { h1 { font-size:26px; } .wrap { padding:20px 14px 30px; } }
+      @media (max-width: 720px) { h1 { font-size:26px; } .wrap { padding:20px 14px 30px; } .return-box { grid-template-columns:1fr; gap:20px; padding:20px; } .return-order { min-height:0; } }
     </style>
   </head>
   <body>
@@ -1332,7 +1469,7 @@ function html(mode) {
             setStatus('err', '缺少 merchantOrderId，无法确认订单。');
             return;
           }
-          appEl.innerHTML = '<div class="return-box user"><div><strong>订单号</strong><div class="meta mono">' + merchantOrderId + '</div></div><div class="status-grid" id="status-grid"><div class="status-chip"><span class="label">支付状态</span><strong>查询中</strong></div><div class="status-chip"><span class="label">发放状态</span><strong>查询中</strong></div></div></div>';
+          appEl.innerHTML = '<section class="return-box user"><div class="return-order"><span class="label">订单号</span><strong class="order-id mono">' + merchantOrderId + '</strong><p class="meta">支付结果会自动更新，最终以支付状态和发放状态为准。</p><a class="btn primary return-console" href="/">返回控制台</a></div><div class="status-grid" id="status-grid"><div class="status-chip"><span class="label">支付状态</span><strong>查询中</strong></div><div class="status-chip"><span class="label">发放状态</span><strong>查询中</strong></div></div></section>';
           async function tick() {
             try {
               const result = await api('/pay-api/orders/' + encodeURIComponent(merchantOrderId) + '/check', { method: 'POST' });
@@ -1527,6 +1664,36 @@ app.get("/pay-api/catalog", async (_req, res) => {
   }
 });
 
+app.get("/pay-api/daily-quota", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const user = await requireCurrentUser(req);
+    const quotaDailyLimit = await getUserDailyQuotaExtension(client, user.id);
+    const { rows } = await client.query(
+      `
+      SELECT MAX(traffic_pack_expires_at) AS traffic_pack_expires_at
+      FROM payment_orders
+      WHERE user_id = $1
+        AND sku_type = 'traffic'
+        AND fulfillment_status = 'fulfilled'
+        AND COALESCE(traffic_pack_reverted, false) = false
+        AND traffic_pack_expires_at > NOW()
+      `,
+      [Number(user.id)],
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      quotaDailyLimit,
+      trafficPackExpiresAt: rows[0]?.traffic_pack_expires_at || null,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to fetch daily quota";
+    jsonError(res, message === "Missing embedded token" ? 401 : 500, message);
+  } finally {
+    client.release();
+  }
+});
+
 app.post("/pay-api/orders", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1556,10 +1723,6 @@ app.post("/pay-api/orders", async (req, res) => {
       amountCents: Number(sku.amount_cents),
       clientIp: req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() || req.socket.remoteAddress || "",
     };
-    if (isTrafficPack) {
-      await ensureNoActiveTrafficPack(draftOrder.userId, client);
-    }
-
     const trading = await createTradingOrder(draftOrder, sku);
     const { rows } = await client.query(
       `
@@ -1596,8 +1759,7 @@ app.post("/pay-api/orders", async (req, res) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to create order";
-    const status = message.includes("active traffic pack") ? 409 : 500;
-    jsonError(res, status, message);
+    jsonError(res, 500, message);
   } finally {
     client.release();
   }
@@ -1670,7 +1832,44 @@ app.get("/pay-api/orders", async (req, res) => {
       keyword: filters.keyword,
     });
   } catch (error) {
-    jsonError(res, 500, error instanceof Error ? error.message : "Failed to list orders");
+    const message = error instanceof Error ? error.message : "Failed to list orders";
+    jsonError(res, message === "Missing embedded token" ? 401 : 500, message);
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/pay-api/admin/users/:userId/daily-quota", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await requireCurrentAdmin(req);
+    const userId = parsePositiveInt(req.params.userId, 0);
+    if (!userId) {
+      return jsonError(res, 400, "Invalid user id");
+    }
+    res.json({ userId, quotaDailyLimit: await getUserDailyQuotaExtension(client, userId) });
+  } catch (error) {
+    const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed to fetch daily quota";
+    jsonError(res, message === "Forbidden" ? 403 : 500, message);
+  } finally {
+    client.release();
+  }
+});
+
+app.put("/pay-api/admin/users/:userId/daily-quota", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await requireCurrentAdmin(req);
+    const userId = parsePositiveInt(req.params.userId, 0);
+    const quotaDailyLimit = parseDecimalNumber(req.body?.quotaDailyLimit);
+    if (!userId || quotaDailyLimit === null || quotaDailyLimit < 0) {
+      return jsonError(res, 400, "userId and a non-negative quotaDailyLimit are required");
+    }
+    await upsertUserDailyQuotaExtension(client, userId, quotaDailyLimit);
+    res.json({ userId, quotaDailyLimit });
+  } catch (error) {
+    const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed to update daily quota";
+    jsonError(res, message === "Forbidden" ? 403 : 500, message);
   } finally {
     client.release();
   }

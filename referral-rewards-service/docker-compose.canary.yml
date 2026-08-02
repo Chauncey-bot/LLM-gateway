@@ -1,0 +1,20 @@
+services:
+  referral-rewards-canary:
+    image: referral-rewards-service:canary
+    container_name: referral-rewards-canary
+    restart: unless-stopped
+    env_file:
+      - .env.canary
+    ports:
+      - "${CANARY_PORT:-18196}:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - "${CANARY_CATALOG_FILE:-./referral-catalog.json}:/app/catalog.json:ro"
+    networks:
+      - sub2api-net
+
+networks:
+  sub2api-net:
+    external: true
+    name: ${CANARY_NETWORK:-sub2api_sub2api-network}

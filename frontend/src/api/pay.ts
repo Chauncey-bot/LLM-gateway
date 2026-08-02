@@ -48,6 +48,11 @@ export interface PaymentCatalogResponse {
   trafficPacks: PaymentCatalogTrafficPack[]
 }
 
+export interface PaymentDailyQuotaResponse {
+  quotaDailyLimit: number
+  trafficPackExpiresAt: string | null
+}
+
 export type PaymentTradeStatus = 'pending' | 'paid' | 'closed' | 'failed' | 'refunded' | string
 export type PaymentFulfillmentStatus = 'pending' | 'fulfilled' | 'fulfillment_failed' | string
 export type PaymentSkuType = 'subscription' | 'balance' | 'traffic' | string
@@ -218,6 +223,10 @@ export async function getPaymentCatalog(): Promise<PaymentCatalogResponse> {
   return payRequest<PaymentCatalogResponse>('/pay-api/catalog')
 }
 
+export async function getPaymentDailyQuota(): Promise<PaymentDailyQuotaResponse> {
+  return payRequest<PaymentDailyQuotaResponse>('/pay-api/daily-quota')
+}
+
 export async function createPaymentOrder(skuCode: string): Promise<CreatePaymentOrderResponse> {
   return payRequest<CreatePaymentOrderResponse>('/pay-api/orders', {
     method: 'POST',
@@ -289,6 +298,7 @@ export async function updateAdminPaymentOrderStatus(
 export const payAPI = {
   getSession: getPaymentSession,
   getCatalog: getPaymentCatalog,
+  getDailyQuota: getPaymentDailyQuota,
   createOrder: createPaymentOrder,
   getOrder: getPaymentOrder,
   checkOrder: checkPaymentOrder,

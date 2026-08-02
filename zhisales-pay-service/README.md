@@ -10,6 +10,9 @@ Independent purchase page and payment bridge for the current `sub2api` skin.
 - Queries Trading order status via the documented `opt=order_query` API
 - Stores orders in a dedicated PostgreSQL database
 - Exposes order status APIs for the return page
+- Allows multiple paid traffic packs in one day; each pack immediately adds its
+  quota bonus, and all of that day's bonuses are removed together at the next
+  China midnight
 - Prepares fulfillment hooks for:
   - `POST /api/v1/admin/subscriptions/assign`
   - `POST /api/v1/admin/subscriptions/:id/extend`

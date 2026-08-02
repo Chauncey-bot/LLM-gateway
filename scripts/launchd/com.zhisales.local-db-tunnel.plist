@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.zhisales.local-db-tunnel</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/ssh</string>
+    <string>-i</string>
+    <string>/Users/chauncey/Downloads/sg.pem</string>
+    <string>-o</string>
+    <string>ExitOnForwardFailure=yes</string>
+    <string>-o</string>
+    <string>ServerAliveInterval=30</string>
+    <string>-o</string>
+    <string>ServerAliveCountMax=4</string>
+    <string>-o</string>
+    <string>StrictHostKeyChecking=no</string>
+    <string>-N</string>
+    <string>-L</string>
+    <string>127.0.0.1:25432:172.21.0.2:5432</string>
+    <string>ubuntu@18.143.67.94</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/zhisales-db-tunnel.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/zhisales-db-tunnel.log</string>
+</dict>
+</plist>
