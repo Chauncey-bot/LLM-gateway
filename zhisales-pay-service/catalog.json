@@ -25,7 +25,7 @@
       "title": "OpenAI 100 Daily Temp Top-up (v2)",
       "description": "10 RMB temporary refill for one day, 100 USD daily limit.",
       "amount_cents": 1000,
-      "group_id": 10,
+      "group_id": 24,
       "validity_days": 1,
       "topup_balance_amount": 100
     },
