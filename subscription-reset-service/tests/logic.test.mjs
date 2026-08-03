@@ -7,6 +7,7 @@ import {
   normalizeRemainingMs,
   ServiceError,
   parseIntId,
+  startOfDay,
 } from "../server.mjs";
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -44,4 +45,34 @@ test("parseIntId parses only positive integers", () => {
   assert.equal(parseIntId("123"), 123);
   assert.throws(() => parseIntId("0"), ServiceError);
   assert.throws(() => parseIntId("abc"), ServiceError);
+});
+
+test("startOfDay normalizes to local midnight", () => {
+  const lateInDay = new Date(2026, 7, 1, 23, 59, 59, 999);
+  const start = startOfDay(lateInDay);
+  assert.equal(start.getFullYear(), 2026);
+  assert.equal(start.getMonth(), 7);
+  assert.equal(start.getDate(), 1);
+  assert.equal(start.getHours(), 0);
+  assert.equal(start.getMinutes(), 0);
+  assert.equal(start.getSeconds(), 0);
+  assert.equal(start.getMilliseconds(), 0);
+
+  const justAfterMidnight = new Date(2026, 7, 2, 0, 0, 1);
+  const nextStart = startOfDay(justAfterMidnight);
+  assert.equal(nextStart.getFullYear(), 2026);
+  assert.equal(nextStart.getMonth(), 7);
+  assert.equal(nextStart.getDate(), 2);
+  assert.equal(nextStart.getHours(), 0);
+  assert.equal(nextStart.getMinutes(), 0);
+  assert.equal(nextStart.getSeconds(), 0);
+  assert.equal(nextStart.getMilliseconds(), 0);
+});
+
+test("startOfDay does not mutate input date", () => {
+  const before = new Date(2026, 7, 1, 12, 34, 56);
+  const beforeSnapshot = before.getTime();
+  const normalized = startOfDay(before);
+  assert.equal(before.getTime(), beforeSnapshot);
+  assert.equal(normalized.getTime() < before.getTime(), true);
 });

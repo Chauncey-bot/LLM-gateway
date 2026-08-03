@@ -39,6 +39,12 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function startOfDay(date = new Date()) {
+  const target = date instanceof Date ? new Date(date.getTime()) : new Date(date);
+  target.setHours(0, 0, 0, 0);
+  return target;
+}
+
 class ServiceError extends Error {
   /** @type {number} */
   status;
@@ -256,19 +262,20 @@ async function resetQuotaAndShortenSubscription(subscriptionId, userId, resetReq
       throw new ServiceError(409, `Subscription must remain active for at least ${config.minimumRemainingHours} hours`);
     }
 
+    const todayStart = startOfDay();
     const updated = await client.query(
       `UPDATE user_subscriptions
        SET daily_usage_usd = CASE WHEN $2 THEN 0 ELSE daily_usage_usd END,
            weekly_usage_usd = CASE WHEN $3 THEN 0 ELSE weekly_usage_usd END,
            monthly_usage_usd = CASE WHEN $4 THEN 0 ELSE monthly_usage_usd END,
-           daily_window_start = CASE WHEN $2 THEN NOW() ELSE daily_window_start END,
-           weekly_window_start = CASE WHEN $3 THEN NOW() ELSE weekly_window_start END,
-           monthly_window_start = CASE WHEN $4 THEN NOW() ELSE monthly_window_start END,
+           daily_window_start = CASE WHEN $2 THEN $5 ELSE daily_window_start END,
+           weekly_window_start = CASE WHEN $3 THEN $5 ELSE weekly_window_start END,
+           monthly_window_start = CASE WHEN $4 THEN $5 ELSE monthly_window_start END,
            expires_at = expires_at - INTERVAL '24 hours',
            updated_at = NOW()
        WHERE id = $1
        RETURNING id, user_id, status, expires_at, daily_usage_usd, weekly_usage_usd, monthly_usage_usd`,
-      [subscriptionId, resetRequest.daily, resetRequest.weekly, resetRequest.monthly]
+      [subscriptionId, resetRequest.daily, resetRequest.weekly, resetRequest.monthly, todayStart]
     );
     if (resetRequest.daily) {
       await resetActiveTrafficPacksForUser(Number(subscription.user_id));
@@ -337,6 +344,7 @@ export {
   hasMinimumRemainingHours,
   normalizeRemainingMs,
   MINIMUM_REMAINING_HOURS,
+  startOfDay,
   normalizeResetWindowRequest,
   parseIntId,
   ServiceError,
