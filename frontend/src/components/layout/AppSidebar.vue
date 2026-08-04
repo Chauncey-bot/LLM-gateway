@@ -658,8 +658,18 @@ const menuPathWhitelist = computed<Set<string>>(() =>
         '/admin/promo-codes',
         '/admin/usage',
         '/admin/settings',
+        // Administrators can access the personal "My Account" menu as well.
+        // Keep these routes distinct from their admin equivalents so two menu
+        // items do not resolve to, and become active for, the same route.
         '/keys',
+        '/usage',
+        '/subscriptions',
+        '/orders',
+        '/referrals',
+        '/points-mall',
         '/profile',
+        '/sora',
+        '/purchase',
         '/custom'
       ])
     : new Set([
