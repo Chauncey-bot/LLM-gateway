@@ -85,6 +85,9 @@ export interface PaymentOrder {
   trafficPackReverted?: boolean
   trafficPackRevertedAt?: string | null
   trafficPackRevertError?: string | null
+  trafficPackStatus?: 'applied' | 'expired' | 'cancelled_by_manual_reset' | null
+  trafficPackResetReason?: string | null
+  trafficPackResetAt?: string | null
 }
 
 export interface CreatePaymentOrderResponse {

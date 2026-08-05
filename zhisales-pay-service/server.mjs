@@ -9,6 +9,11 @@ import pg from "pg";
 import { buildOrderFulfillmentRequest } from "./subscription-fulfillment.mjs";
 import { fulfillSubscriptionWithRetry } from "./subscription-fulfillment-retry.mjs";
 import { normalizeSubscriptionListResponse } from "./subscription-list.mjs";
+import {
+  calculateEffectiveDailyQuota,
+  calculateTrafficPackPurchaseQuota,
+  TRAFFIC_PACK_STATUS,
+} from "./traffic-pack-state.mjs";
 
 const { Pool } = pg;
 
@@ -371,6 +376,9 @@ async function initDb() {
       traffic_pack_reverted BOOLEAN NOT NULL DEFAULT FALSE,
       traffic_pack_reverted_at TIMESTAMPTZ,
       traffic_pack_revert_error TEXT,
+      traffic_pack_status TEXT NOT NULL DEFAULT 'applied',
+      traffic_pack_reset_reason TEXT,
+      traffic_pack_reset_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -395,6 +403,30 @@ async function initDb() {
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_reverted BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_reverted_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_revert_error TEXT;`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_status TEXT NOT NULL DEFAULT 'applied';`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_reset_reason TEXT;`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_reset_at TIMESTAMPTZ;`);
+  await pool.query(`
+    UPDATE payment_orders
+    SET traffic_pack_status = 'expired',
+        traffic_pack_reset_reason = COALESCE(traffic_pack_reset_reason, 'legacy_reverted')
+    WHERE sku_type = 'traffic'
+      AND COALESCE(traffic_pack_reverted, false) = true
+      AND traffic_pack_status = 'applied';
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS traffic_pack_events (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      merchant_order_id VARCHAR(64),
+      event_type TEXT NOT NULL,
+      base_daily_quota_usd NUMERIC(20,8),
+      effective_daily_quota_usd NUMERIC(20,8),
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_traffic_pack_events_user_id_created_at ON traffic_pack_events (user_id, created_at DESC);`);
   await pool.query(
     `CREATE INDEX IF NOT EXISTS idx_payment_orders_traffic_pack_reclaim ON payment_orders (traffic_pack_expires_at)\n   WHERE sku_type = 'traffic' AND COALESCE(traffic_pack_reverted, false) = false;`,
   );
@@ -528,14 +560,21 @@ async function notifyReferralReward(order) {
   return { sent: true, payload, result: json };
 }
 
-async function fulfillOrder(order, client) {
+export async function fulfillOrder(order, client) {
   if (order.fulfillment_status === "fulfilled") {
     return order;
   }
 
   try {
     if (order.sku_type === "traffic") {
-      order = await applyTrafficPackOrder(order, client);
+      await client.query("SAVEPOINT traffic_pack_fulfillment");
+      try {
+        order = await applyTrafficPackOrder(order, client);
+        await client.query("RELEASE SAVEPOINT traffic_pack_fulfillment");
+      } catch (error) {
+        await client.query("ROLLBACK TO SAVEPOINT traffic_pack_fulfillment");
+        throw error;
+      }
     } else if (order.sku_type === "subscription") {
       await fulfillSubscriptionWithRetry(order, {
         listSubscriptions: listUserSubscriptions,
@@ -771,41 +810,14 @@ export function calculateTrafficPackQuota({ currentDailyLimit, activePackBaseDai
   };
 }
 
-async function getUserDailyQuotaExtensionForUpdate(client, userId) {
-  await client.query(
-    `
-    INSERT INTO user_extensions (user_id)
-    VALUES ($1)
-    ON CONFLICT (user_id) DO NOTHING
-    `,
-    [Number(userId)],
-  );
-  const { rows } = await client.query(
-    `
-    SELECT quota_daily_limit
-    FROM user_extensions
-    WHERE user_id = $1
-    FOR UPDATE
-    `,
-    [Number(userId)],
-  );
-  const quotaDailyLimit = rows.length ? parseDecimalNumber(rows[0].quota_daily_limit) : null;
-  if (quotaDailyLimit === null || quotaDailyLimit < 0) {
-    throw new Error(`Invalid user daily quota extension for user ${userId}`);
+export function resolveTrafficPackBaseDailyQuota({ extensionDailyLimit, subscriptionDailyLimit }) {
+  if (Number.isFinite(extensionDailyLimit) && extensionDailyLimit > 0) {
+    return extensionDailyLimit;
   }
-  return quotaDailyLimit;
-}
-
-async function setUserDailyQuotaExtension(client, userId, quotaDailyLimit) {
-  await client.query(
-    `
-    UPDATE user_extensions
-    SET quota_daily_limit = $2,
-        updated_at = NOW()
-    WHERE user_id = $1
-    `,
-    [Number(userId), quotaDailyLimit],
-  );
+  if (Number.isFinite(subscriptionDailyLimit) && subscriptionDailyLimit > 0) {
+    return subscriptionDailyLimit;
+  }
+  throw new Error("User does not have a finite current daily quota limit");
 }
 
 async function getUserDailyQuotaExtension(client, userId) {
@@ -840,23 +852,91 @@ async function lockTrafficPackUser(client, userId) {
   await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [Number(userId)]);
 }
 
-async function getActiveTrafficPackBaseDailyQuota(client, userId) {
+async function getActiveSubscriptionDailyLimit(userId) {
+  const subscriptions = await listUserSubscriptions(userId);
+  const activeLimits = subscriptions
+    .filter((subscription) => subscription && subscription.status === "active")
+    .map((subscription) => parseDecimalNumber(subscription?.group?.daily_limit_usd))
+    .filter((limit) => Number.isFinite(limit) && limit > 0);
+
+  if (!activeLimits.length) {
+    return null;
+  }
+
+  return Math.max(...activeLimits);
+}
+
+async function getCurrentPlanDailyQuota(userId, { required = true } = {}) {
+  const subscriptionDailyLimit = await getActiveSubscriptionDailyLimit(userId);
+  if (subscriptionDailyLimit !== null) {
+    return subscriptionDailyLimit;
+  }
+  if (!required) {
+    return 0;
+  }
+  return resolveTrafficPackBaseDailyQuota({
+    extensionDailyLimit: null,
+    subscriptionDailyLimit,
+  });
+}
+
+async function listAppliedTrafficPacks(client, userId, { forUpdate = false } = {}) {
   const { rows } = await client.query(
     `
-    SELECT traffic_pack_base_daily_quota_usd
+    SELECT id, merchant_order_id, traffic_pack_bonus_usd, traffic_pack_expires_at, traffic_pack_status
     FROM payment_orders
     WHERE user_id = $1
       AND sku_type = 'traffic'
       AND fulfillment_status = 'fulfilled'
-      AND COALESCE(traffic_pack_reverted, false) = false
+      AND traffic_pack_status = $2
+      AND traffic_pack_expires_at IS NOT NULL
       AND traffic_pack_expires_at > NOW()
     ORDER BY traffic_pack_applied_at ASC NULLS LAST, id ASC
-    LIMIT 1
-    FOR UPDATE
+    ${forUpdate ? "FOR UPDATE" : ""}
     `,
-    [Number(userId)],
+    [Number(userId), TRAFFIC_PACK_STATUS.APPLIED],
   );
-  return rows.length ? parseDecimalNumber(rows[0].traffic_pack_base_daily_quota_usd) : null;
+  return rows;
+}
+
+async function recordTrafficPackEvent(client, {
+  userId,
+  merchantOrderId = null,
+  eventType,
+  baseDailyQuota = null,
+  effectiveDailyQuota = null,
+  details = {},
+}) {
+  await client.query(
+    `
+    INSERT INTO traffic_pack_events (
+      user_id, merchant_order_id, event_type, base_daily_quota_usd, effective_daily_quota_usd, details
+    )
+    VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+    `,
+    [
+      Number(userId),
+      merchantOrderId,
+      eventType,
+      baseDailyQuota,
+      effectiveDailyQuota,
+      JSON.stringify(details),
+    ],
+  );
+}
+
+async function synchronizeEffectiveDailyQuota(client, userId, { requiredPlan = false } = {}) {
+  const baseDailyQuota = await getCurrentPlanDailyQuota(userId, { required: requiredPlan });
+  const packs = await listAppliedTrafficPacks(client, userId, { forUpdate: true });
+  const quota = calculateEffectiveDailyQuota({
+    baseDailyQuota,
+    packs,
+  });
+  // A traffic pack is not an entitlement without a currently active plan.
+  // If the plan expired, do not leave a temporary pack as the effective limit.
+  const effectiveDailyQuota = baseDailyQuota > 0 ? quota.effectiveDailyQuota : 0;
+  await upsertUserDailyQuotaExtension(client, userId, effectiveDailyQuota);
+  return { ...quota, effectiveDailyQuota, packs };
 }
 
 async function queryTrade(order) {
@@ -942,19 +1022,19 @@ async function applyTrafficPackOrder(order, client) {
   await lockTrafficPackUser(client, order.user_id);
   await reclaimExpiredTrafficPacksForUser(client, order.user_id);
 
-  // All packs bought on a given day share the first pack's baseline. This
-  // lets their bonuses stack now while allowing a single correct reset at the
-  // next China midnight.
-  const currentDailyLimit = await getUserDailyQuotaExtensionForUpdate(client, order.user_id);
-  const activePackBaseDailyQuota = await getActiveTrafficPackBaseDailyQuota(client, order.user_id);
-  const { baseDailyQuota, newDailyLimit } = calculateTrafficPackQuota({
-    currentDailyLimit,
-    activePackBaseDailyQuota,
+  // The subscription is always the source of the base quota. user_extensions
+  // is only a projection of the currently effective quota, so an empty or
+  // stale extension can never become a traffic-pack baseline.
+  const baseDailyQuota = await getCurrentPlanDailyQuota(order.user_id, { required: true });
+  const activePacks = await listAppliedTrafficPacks(client, order.user_id, { forUpdate: true });
+  const { newDailyQuota } = calculateTrafficPackPurchaseQuota({
+    baseDailyQuota,
+    packs: activePacks,
     bonusQuotaUsd,
   });
   const expiresAt = getTrafficPackExpiresAt();
 
-  await setUserDailyQuotaExtension(client, order.user_id, newDailyLimit);
+  await upsertUserDailyQuotaExtension(client, order.user_id, newDailyQuota);
 
   const update = await client.query(
     `
@@ -966,6 +1046,9 @@ async function applyTrafficPackOrder(order, client) {
         traffic_pack_base_daily_quota_usd = $3,
         traffic_pack_applied_at = NOW(),
         traffic_pack_expires_at = $4,
+        traffic_pack_status = $5,
+        traffic_pack_reset_reason = NULL,
+        traffic_pack_reset_at = NULL,
         updated_at = NOW()
     WHERE merchant_order_id = $1
     RETURNING *
@@ -975,117 +1058,81 @@ async function applyTrafficPackOrder(order, client) {
       bonusQuotaUsd,
       baseDailyQuota,
       expiresAt,
+      TRAFFIC_PACK_STATUS.APPLIED,
     ],
   );
+  await recordTrafficPackEvent(client, {
+    userId: order.user_id,
+    merchantOrderId: order.merchant_order_id,
+    eventType: "purchase_applied",
+    baseDailyQuota,
+    effectiveDailyQuota: newDailyQuota,
+    details: { bonusQuotaUsd, expiresAt: expiresAt.toISOString() },
+  });
   return update.rows[0];
 }
 
 async function reclaimExpiredTrafficPacksForUser(client, userId) {
   const { rows } = await client.query(
     `
-    SELECT *
+    SELECT id, merchant_order_id, traffic_pack_bonus_usd
     FROM payment_orders
     WHERE user_id = $1
       AND sku_type = 'traffic'
       AND fulfillment_status = 'fulfilled'
-      AND COALESCE(traffic_pack_reverted, false) = false
+      AND traffic_pack_status = $2
       AND traffic_pack_expires_at IS NOT NULL
       AND traffic_pack_expires_at <= NOW()
     ORDER BY traffic_pack_applied_at ASC NULLS LAST, id ASC
     FOR UPDATE
     `,
-    [Number(userId)],
+    [Number(userId), TRAFFIC_PACK_STATUS.APPLIED],
   );
   if (!rows.length) {
     return { scanned: 0, reclaimed: 0 };
   }
 
-  const baseDailyQuota = parseDecimalNumber(rows[0].traffic_pack_base_daily_quota_usd);
-  if (baseDailyQuota === null) {
-    const errorMessage = `Traffic pack baseline is missing for user ${userId}`;
-    await client.query(
-      `
-      UPDATE payment_orders
-      SET traffic_pack_revert_error = $2,
-          updated_at = NOW()
-      WHERE user_id = $1
-        AND sku_type = 'traffic'
-        AND fulfillment_status = 'fulfilled'
-        AND COALESCE(traffic_pack_reverted, false) = false
-        AND traffic_pack_expires_at IS NOT NULL
-        AND traffic_pack_expires_at <= NOW()
-      `,
-      [Number(userId), errorMessage],
-    );
-    throw new Error(errorMessage);
-  }
-
-  try {
-    await setUserDailyQuotaExtension(client, userId, baseDailyQuota);
-    await client.query(
-      `
-      UPDATE payment_orders
-      SET traffic_pack_reverted = true,
-          traffic_pack_reverted_at = NOW(),
-          traffic_pack_revert_error = NULL,
-          updated_at = NOW()
-      WHERE user_id = $1
-        AND sku_type = 'traffic'
-        AND fulfillment_status = 'fulfilled'
-        AND COALESCE(traffic_pack_reverted, false) = false
-        AND traffic_pack_expires_at IS NOT NULL
-        AND traffic_pack_expires_at <= NOW()
-      `,
-      [Number(userId)],
-    );
-    return { scanned: rows.length, reclaimed: rows.length };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    await client.query(
-      `
-      UPDATE payment_orders
-      SET traffic_pack_revert_error = $2,
-          updated_at = NOW()
-      WHERE user_id = $1
-        AND sku_type = 'traffic'
-        AND fulfillment_status = 'fulfilled'
-        AND COALESCE(traffic_pack_reverted, false) = false
-        AND traffic_pack_expires_at IS NOT NULL
-        AND traffic_pack_expires_at <= NOW()
-      `,
-      [Number(userId), errorMessage],
-    );
-    throw error;
-  }
-}
-
-async function resetActiveTrafficPacksForUser(client, userId) {
-  const { rows } = await client.query(
+  await client.query(
     `
-    SELECT traffic_pack_base_daily_quota_usd
-    FROM payment_orders
+    UPDATE payment_orders
+    SET traffic_pack_reverted = true,
+        traffic_pack_reverted_at = NOW(),
+        traffic_pack_revert_error = NULL,
+        traffic_pack_status = $2,
+        traffic_pack_reset_reason = 'midnight',
+        traffic_pack_reset_at = NOW(),
+        updated_at = NOW()
     WHERE user_id = $1
       AND sku_type = 'traffic'
       AND fulfillment_status = 'fulfilled'
-      AND COALESCE(traffic_pack_reverted, false) = false
+      AND traffic_pack_status = $3
       AND traffic_pack_expires_at IS NOT NULL
-      AND traffic_pack_expires_at > NOW()
-    ORDER BY traffic_pack_applied_at ASC NULLS LAST, id ASC
-    FOR UPDATE
+      AND traffic_pack_expires_at <= NOW()
     `,
-    [Number(userId)],
+    [Number(userId), TRAFFIC_PACK_STATUS.EXPIRED, TRAFFIC_PACK_STATUS.APPLIED],
   );
-
-  if (!rows.length) {
-    return {
-      restored: false,
-      baselineDailyQuota: null,
-      reverted: 0,
-    };
+  const quota = await synchronizeEffectiveDailyQuota(client, userId);
+  for (const row of rows) {
+    await recordTrafficPackEvent(client, {
+      userId,
+      merchantOrderId: row.merchant_order_id,
+      eventType: "midnight_expired",
+      baseDailyQuota: quota.baseDailyQuota,
+      effectiveDailyQuota: quota.effectiveDailyQuota,
+      details: { bonusQuotaUsd: parseDecimalNumber(row.traffic_pack_bonus_usd) || 0 },
+    });
   }
+  return { scanned: rows.length, reclaimed: rows.length };
+}
 
-  const baselineDailyQuota = parseDecimalNumber(rows[0].traffic_pack_base_daily_quota_usd) || 0;
-  await setUserDailyQuotaExtension(client, userId, baselineDailyQuota);
+async function resetActiveTrafficPacksForUser(client, userId) {
+  await reclaimExpiredTrafficPacksForUser(client, userId);
+  const rows = await listAppliedTrafficPacks(client, userId, { forUpdate: true });
+  const baselineDailyQuota = await getCurrentPlanDailyQuota(userId, { required: false });
+  if (!rows.length) {
+    await upsertUserDailyQuotaExtension(client, userId, baselineDailyQuota);
+    return { restored: false, baselineDailyQuota, reverted: 0 };
+  }
 
   const updateResult = await client.query(
     `
@@ -1093,16 +1140,34 @@ async function resetActiveTrafficPacksForUser(client, userId) {
        SET traffic_pack_reverted = true,
            traffic_pack_reverted_at = NOW(),
            traffic_pack_revert_error = NULL,
+           traffic_pack_status = $2,
+           traffic_pack_reset_reason = 'manual_reset',
+           traffic_pack_reset_at = NOW(),
            updated_at = NOW()
      WHERE user_id = $1
        AND sku_type = 'traffic'
        AND fulfillment_status = 'fulfilled'
-       AND COALESCE(traffic_pack_reverted, false) = false
+       AND traffic_pack_status = $3
        AND traffic_pack_expires_at IS NOT NULL
        AND traffic_pack_expires_at > NOW()
     `,
-    [Number(userId)],
+    [
+      Number(userId),
+      TRAFFIC_PACK_STATUS.CANCELLED_BY_MANUAL_RESET,
+      TRAFFIC_PACK_STATUS.APPLIED,
+    ],
   );
+  await upsertUserDailyQuotaExtension(client, userId, baselineDailyQuota);
+  for (const row of rows) {
+    await recordTrafficPackEvent(client, {
+      userId,
+      merchantOrderId: row.merchant_order_id,
+      eventType: "manual_reset_cancelled",
+      baseDailyQuota: baselineDailyQuota,
+      effectiveDailyQuota: baselineDailyQuota,
+      details: { bonusQuotaUsd: parseDecimalNumber(row.traffic_pack_bonus_usd) || 0 },
+    });
+  }
 
   return {
     restored: true,
@@ -1124,13 +1189,13 @@ async function reconcileExpiredTrafficPacks(limit = 20) {
       FROM payment_orders
       WHERE sku_type = 'traffic'
         AND fulfillment_status = 'fulfilled'
-        AND COALESCE(traffic_pack_reverted, false) = false
+        AND traffic_pack_status = $1
         AND traffic_pack_expires_at IS NOT NULL
         AND traffic_pack_expires_at <= NOW()
       ORDER BY user_id ASC
-      LIMIT $1
+      LIMIT $2
       `,
-      [limit],
+      [TRAFFIC_PACK_STATUS.APPLIED, limit],
     );
 
     for (const row of userRows) {
@@ -1211,6 +1276,9 @@ function normalizeOrderRow(row) {
     trafficPackReverted: row.traffic_pack_reverted,
     trafficPackRevertedAt: row.traffic_pack_reverted_at,
     trafficPackRevertError: row.traffic_pack_revert_error,
+    trafficPackStatus: row.traffic_pack_status || null,
+    trafficPackResetReason: row.traffic_pack_reset_reason || null,
+    trafficPackResetAt: row.traffic_pack_reset_at || null,
   };
 }
 
@@ -1720,7 +1788,10 @@ app.get("/pay-api/daily-quota", async (req, res) => {
   const client = await pool.connect();
   try {
     const user = await requireCurrentUser(req);
-    const quotaDailyLimit = await getUserDailyQuotaExtension(client, user.id);
+    await client.query("BEGIN");
+    await lockTrafficPackUser(client, user.id);
+    await reclaimExpiredTrafficPacksForUser(client, user.id);
+    const quota = await synchronizeEffectiveDailyQuota(client, user.id);
     const { rows } = await client.query(
       `
       SELECT MAX(traffic_pack_expires_at) AS traffic_pack_expires_at
@@ -1728,17 +1799,19 @@ app.get("/pay-api/daily-quota", async (req, res) => {
       WHERE user_id = $1
         AND sku_type = 'traffic'
         AND fulfillment_status = 'fulfilled'
-        AND COALESCE(traffic_pack_reverted, false) = false
+        AND traffic_pack_status = $2
         AND traffic_pack_expires_at > NOW()
       `,
-      [Number(user.id)],
+      [Number(user.id), TRAFFIC_PACK_STATUS.APPLIED],
     );
+    await client.query("COMMIT");
     res.setHeader("Cache-Control", "no-store");
     res.json({
-      quotaDailyLimit,
+      quotaDailyLimit: quota.effectiveDailyQuota,
       trafficPackExpiresAt: rows[0]?.traffic_pack_expires_at || null,
     });
   } catch (error) {
+    await client.query("ROLLBACK");
     const message = error instanceof Error ? error.message : "Failed to fetch daily quota";
     jsonError(res, message === "Missing embedded token" ? 401 : 500, message);
   } finally {
@@ -1758,6 +1831,9 @@ app.post("/pay-api/orders", async (req, res) => {
       return jsonError(res, 400, "Invalid or disabled skuCode");
     }
     const isTrafficPack = sku.type === "traffic";
+    if (isTrafficPack && (await getActiveSubscriptionDailyLimit(user.id)) === null) {
+      return jsonError(res, 400, "An active subscription with a finite daily quota is required for traffic packs");
+    }
     const merchantOrderId = generateMerchantOrderId();
     const draftOrder = {
       merchantOrderId,

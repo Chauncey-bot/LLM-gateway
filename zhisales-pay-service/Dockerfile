@@ -9,6 +9,7 @@ COPY server.mjs ./
 COPY subscription-list.mjs ./
 COPY subscription-fulfillment.mjs ./
 COPY subscription-fulfillment-retry.mjs ./
+COPY traffic-pack-state.mjs ./
 COPY catalog.json ./
 
 ENV NODE_ENV=production

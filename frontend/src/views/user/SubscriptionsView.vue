@@ -8,7 +8,7 @@
       </div>
 
       <div
-        v-if="!loading && dailyQuota !== null"
+        v-if="!loading && activeTrafficPack"
         class="rounded-2xl border border-cyan-200 bg-cyan-50 px-5 py-4 text-cyan-950 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-50"
       >
         <div class="flex items-center justify-between gap-4">
@@ -18,7 +18,7 @@
               {{ t('userSubscriptions.trafficPack') }}
             </p>
           </div>
-          <strong class="text-2xl tabular-nums">+${{ dailyQuota.toFixed(2) }}</strong>
+          <strong class="text-2xl tabular-nums">+${{ activeTrafficPack.bonusQuotaUsd.toFixed(2) }}</strong>
         </div>
         <p v-if="dailyQuotaExpiresAt" class="mt-2 text-xs text-cyan-800/80 dark:text-cyan-100/80">
           {{ t('userSubscriptions.trafficPackExpires', { time: formatTrafficPackExpiry(dailyQuotaExpiresAt) }) }}
@@ -331,7 +331,10 @@ interface ActiveTrafficPack {
 }
 
 const activeTrafficPack = ref<ActiveTrafficPack | null>(null)
-const dailyQuota = ref<number | null>(null)
+// The payment API returns the effective daily limit (base plan + active pack),
+// not the traffic-pack bonus. Keep that distinction so it is never added to
+// the subscription base a second time.
+const currentDailyQuota = ref<number | null>(null)
 const dailyQuotaExpiresAt = ref<string | null>(null)
 const activeSubscriptions = computed(() =>
   subscriptions.value.filter((subscription) => {
@@ -376,11 +379,11 @@ async function loadSubscriptions() {
         getPaymentDailyQuota()
       ])
       activeTrafficPack.value = getActiveTrafficPack(orders)
-      dailyQuota.value = Number(quota.quotaDailyLimit)
+      currentDailyQuota.value = Number(quota.quotaDailyLimit)
       dailyQuotaExpiresAt.value = quota.trafficPackExpiresAt
     } catch (error) {
       activeTrafficPack.value = null
-      dailyQuota.value = null
+      currentDailyQuota.value = null
       dailyQuotaExpiresAt.value = null
       console.warn('Failed to load traffic pack status:', error)
     }
@@ -430,8 +433,15 @@ function getBaseDailyLimit(subscription: UserSubscription): number {
 }
 
 function getEffectiveDailyLimit(subscription: UserSubscription): number {
-  const trafficQuotaBonus = dailyQuota.value ?? activeTrafficPack.value?.bonusQuotaUsd ?? 0
-  return getBaseDailyLimit(subscription) + trafficQuotaBonus
+  const baseDailyLimit = getBaseDailyLimit(subscription)
+
+  // A traffic pack updates the server-side total quota. Use that total as-is;
+  // otherwise a $400 base plan plus a $100 pack would incorrectly become $900.
+  if (activeTrafficPack.value && currentDailyQuota.value !== null) {
+    return currentDailyQuota.value
+  }
+
+  return baseDailyLimit
 }
 
 function formatTimeUntilNextMidnight(): string {
