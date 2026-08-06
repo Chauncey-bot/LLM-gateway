@@ -1127,7 +1127,7 @@ app.put("/admin/redemption-rules/:sku_code", async (req, res) => {
   }
 });
 
-app.get("/admin/referrals", async (req, res) => {
+app.get(["/admin/referrals", "/api/admin/referrals", "/api/referral/admin/referrals"], async (req, res) => {
   const admin = await ensureAdmin(req, res);
   if (!admin) return;
 

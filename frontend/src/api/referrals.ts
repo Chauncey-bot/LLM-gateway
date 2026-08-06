@@ -113,6 +113,17 @@ export interface AdminReferralListResponse {
   actor?: string | null
 }
 
+interface AxiosLikeError {
+  response?: { status?: number }
+  status?: number
+}
+
+function isRetryableReferralAdminReferralsError(error: unknown): boolean {
+  const anyError = error as AxiosLikeError
+  const status = anyError?.response?.status || anyError?.status
+  return status === 404 || status === 405
+}
+
 export async function getReferralProfile(): Promise<ReferralProfile> {
   const { data } = await rewardsClient.get<ReferralProfile>('/api/referral/me')
   return data
@@ -123,6 +134,7 @@ export async function getAdminReferrals(
   pageSize = 100,
   referredUserIds?: number[]
 ): Promise<AdminReferralListResponse> {
+  const endpoints = ['/api/referral/admin/referrals', '/admin/referrals', '/api/admin/referrals']
   const params: Record<string, any> = {
     page,
     page_size: Math.min(100, Math.max(1, pageSize))
@@ -132,8 +144,21 @@ export async function getAdminReferrals(
     params.referred_user_ids = referredUserIds.join(',')
   }
 
-  const { data } = await rewardsClient.get<AdminReferralListResponse>('/admin/referrals', { params })
-  return data
+  let lastError: unknown
+
+  for (const endpoint of endpoints) {
+    try {
+      const { data } = await rewardsClient.get<AdminReferralListResponse>(endpoint, { params })
+      return data
+    } catch (error) {
+      lastError = error
+      if (!isRetryableReferralAdminReferralsError(error)) {
+        throw error
+      }
+    }
+  }
+
+  throw lastError
 }
 
 export async function bindReferralRegistration(referralCode: string): Promise<void> {
