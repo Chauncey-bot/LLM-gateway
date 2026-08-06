@@ -6,7 +6,11 @@ const { Pool } = pg;
 const MINIMUM_REMAINING_HOURS = 24;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_MINUTE_MS = 60 * 1000;
+const DEFAULT_DAILY_RESET_POLL_INTERVAL_MS = ONE_MINUTE_MS;
+const DAILY_QUOTA_RESET_ADVISORY_LOCK = 9182001;
 const rawMinimumHours = Number(process.env.MINIMUM_REMAINING_HOURS);
+const rawDailyResetPollIntervalMs = Number(process.env.DAILY_RESET_POLL_INTERVAL_MS);
+const rawDailyResetBatchSize = Number(process.env.DAILY_RESET_BATCH_SIZE);
 
 const config = {
   port: Number(process.env.PORT) || 3000,
@@ -22,15 +26,29 @@ const config = {
     password: process.env.DB_PASSWORD || "",
   },
   minimumRemainingHours: Number.isFinite(rawMinimumHours) && rawMinimumHours > 0 ? rawMinimumHours : MINIMUM_REMAINING_HOURS,
+  dailyResetTimeZone: process.env.DAILY_RESET_TIME_ZONE || "Asia/Shanghai",
+  dailyResetPollIntervalMs:
+    Number.isFinite(rawDailyResetPollIntervalMs) && rawDailyResetPollIntervalMs >= ONE_MINUTE_MS
+      ? rawDailyResetPollIntervalMs
+      : DEFAULT_DAILY_RESET_POLL_INTERVAL_MS,
+  dailyResetBatchSize:
+    Number.isInteger(rawDailyResetBatchSize) && rawDailyResetBatchSize > 0
+      ? Math.min(rawDailyResetBatchSize, 1000)
+      : 200,
 };
 
 const payServiceAdminSession = {
   token: null,
   expiresAt: 0,
 };
+const sub2apiAdminSession = {
+  token: null,
+  expiresAt: 0,
+};
 
 const app = express();
 const pool = new Pool(config.db);
+let dailyQuotaResetTimer = null;
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "256kb" }));
@@ -43,6 +61,110 @@ function startOfDay(date = new Date()) {
   const target = date instanceof Date ? new Date(date.getTime()) : new Date(date);
   target.setHours(0, 0, 0, 0);
   return target;
+}
+
+/**
+ * Restores every due multi-day subscription to its plan's daily baseline.
+ *
+ * The upstream gateway only advances subscription windows lazily when a user
+ * makes a request. This job makes the business rule explicit: every active
+ * multi-day subscription starts a new daily window at China midnight, whether
+ * or not the user sends a request after midnight. The actual reset goes
+ * through the upstream admin API so its subscription caches are invalidated.
+ */
+async function resetDueDailySubscriptionQuotas({
+  db = pool,
+  batchSize = config.dailyResetBatchSize,
+  resetSubscription = resetSubscriptionDailyQuota,
+} = {}) {
+  const client = await db.connect();
+  let subscriptions = [];
+  try {
+    await client.query("BEGIN");
+    const lock = await client.query(
+      "SELECT pg_try_advisory_xact_lock($1) AS acquired",
+      [DAILY_QUOTA_RESET_ADVISORY_LOCK],
+    );
+    if (!lock.rows[0]?.acquired) {
+      await client.query("COMMIT");
+      return { skipped: true, reset: 0, failed: 0, subscriptions: [] };
+    }
+
+    const result = await client.query(
+      `
+      WITH today AS (
+        SELECT (date_trunc('day', NOW() AT TIME ZONE $1) AT TIME ZONE $1) AS window_start
+      )
+      SELECT subscription.id, subscription.user_id, subscription.group_id
+        FROM user_subscriptions AS subscription
+        CROSS JOIN today
+        WHERE subscription.deleted_at IS NULL
+          AND subscription.status = 'active'
+          AND subscription.expires_at > NOW()
+          AND subscription.daily_window_start IS NOT NULL
+          AND subscription.daily_window_start < today.window_start
+          -- One-day temporary subscriptions are one-time daily quotas. They
+          -- expire instead of receiving another daily allowance.
+          AND subscription.expires_at > subscription.starts_at + INTERVAL '24 hours'
+        ORDER BY subscription.daily_window_start ASC, subscription.id ASC
+        LIMIT $2
+        FOR UPDATE OF subscription SKIP LOCKED
+      `,
+      [config.dailyResetTimeZone, batchSize],
+    );
+    await client.query("COMMIT");
+    subscriptions = result.rows;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  let reset = 0;
+  const failures = [];
+  for (const subscription of subscriptions) {
+    try {
+      await resetSubscription(subscription.id);
+      reset += 1;
+    } catch (error) {
+      failures.push({
+        subscriptionId: subscription.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { skipped: false, reset, failed: failures.length, subscriptions, failures };
+}
+
+function startDailyQuotaResetPoller() {
+  if (dailyQuotaResetTimer || config.dailyResetPollIntervalMs <= 0) {
+    return;
+  }
+
+  const run = async () => {
+    try {
+      const result = await resetDueDailySubscriptionQuotas();
+      if (!result.skipped && (result.reset > 0 || result.failed > 0)) {
+        console.log(
+          `[subscription-reset-service] daily quota reset timezone=${config.dailyResetTimeZone} reset=${result.reset} failed=${result.failed}`,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        "[subscription-reset-service] daily quota reset job failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  };
+
+  // Run shortly after startup as a safe catch-up when the process was down at
+  // midnight, then keep checking for the next China midnight.
+  setTimeout(run, 5_000).unref?.();
+  dailyQuotaResetTimer = setInterval(run, config.dailyResetPollIntervalMs);
+  dailyQuotaResetTimer.unref?.();
 }
 
 class ServiceError extends Error {
@@ -134,6 +256,44 @@ async function getPayServiceAdminToken() {
   payServiceAdminSession.token = data.access_token;
   payServiceAdminSession.expiresAt = now + Number(data.expires_in || 3600) * 1000;
   return payServiceAdminSession.token;
+}
+
+async function getSub2apiAdminToken() {
+  const now = Date.now();
+  if (sub2apiAdminSession.token && now < sub2apiAdminSession.expiresAt - 60_000) {
+    return sub2apiAdminSession.token;
+  }
+  if (!config.sub2apiAdminEmail || !config.sub2apiAdminPassword) {
+    throw new ServiceError(500, "Missing sub2api admin credentials", "MISSING_ADMIN_CREDENTIALS");
+  }
+  const data = await sub2apiJson("/api/v1/auth/login", {
+    method: "POST",
+    body: {
+      email: config.sub2apiAdminEmail,
+      password: config.sub2apiAdminPassword,
+    },
+  });
+  sub2apiAdminSession.token = data.access_token;
+  sub2apiAdminSession.expiresAt = now + Number(data.expires_in || 3600) * 1000;
+  return sub2apiAdminSession.token;
+}
+
+async function sub2apiAdminJson(pathname, options = {}) {
+  const token = await getSub2apiAdminToken();
+  return sub2apiJson(pathname, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+async function resetSubscriptionDailyQuota(subscriptionId) {
+  return sub2apiAdminJson(`/api/v1/admin/subscriptions/${Number(subscriptionId)}/reset-quota`, {
+    method: "POST",
+    body: { daily: true },
+  });
 }
 
 async function payServiceAdminJson(pathname, options = {}) {
@@ -328,6 +488,7 @@ app.post(["/api/v1/subscriptions/:id/reset-quota", "/v1/subscriptions/:id/reset-
 });
 
 function startServer() {
+  startDailyQuotaResetPoller();
   const server = app.listen(config.port, () => {
     console.log(`[subscription-reset-service] listening on http://0.0.0.0:${config.port}`);
   });
@@ -344,7 +505,9 @@ export {
   hasMinimumRemainingHours,
   normalizeRemainingMs,
   MINIMUM_REMAINING_HOURS,
+  resetDueDailySubscriptionQuotas,
   startOfDay,
+  startDailyQuotaResetPoller,
   normalizeResetWindowRequest,
   parseIntId,
   ServiceError,

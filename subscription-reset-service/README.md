@@ -19,6 +19,21 @@
 - `SUB2API_ADMIN_EMAIL`（获取 admin token 所需）
 - `SUB2API_ADMIN_PASSWORD`（获取 admin token 所需）
 - `MINIMUM_REMAINING_HOURS`（默认 `24`）
+- `DAILY_RESET_TIME_ZONE`（固定日额度窗口时区，默认 `Asia/Shanghai`）
+- `DAILY_RESET_POLL_INTERVAL_MS`（补偿扫描间隔，默认 `60000`）
+- `DAILY_RESET_BATCH_SIZE`（每轮最多重置的订阅数，默认 `200`）
+
+## 固定零点自动重置
+
+该服务拥有一个独立的订阅日额度任务，不修改开源 `sub2api`：
+
+- 每分钟检查一次北京时间当天 00:00 后仍未翻页的有效多日订阅；
+- 逐条调用现有上游管理员重置接口，原子清零 `daily_usage_usd`、将 `daily_window_start` 写为当天北京时间 00:00，并同步失效上游缓存；
+- 排除有效期不超过 24 小时的一天临时套餐；
+- 使用 PostgreSQL advisory lock，避免多副本重复执行；
+- 服务在零点不可用时，恢复后会自动补偿遗漏的订阅。
+
+流量包的到期回收仍由支付服务负责；本任务只重置上游订阅套餐的日用量。
 
 ## 启动
 

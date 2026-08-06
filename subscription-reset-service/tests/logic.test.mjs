@@ -7,6 +7,7 @@ import {
   normalizeRemainingMs,
   ServiceError,
   parseIntId,
+  resetDueDailySubscriptionQuotas,
   startOfDay,
 } from "../server.mjs";
 
@@ -75,4 +76,100 @@ test("startOfDay does not mutate input date", () => {
   const normalized = startOfDay(before);
   assert.equal(before.getTime(), beforeSnapshot);
   assert.equal(normalized.getTime() < before.getTime(), true);
+});
+
+test("daily reset job finds due multi-day subscriptions and uses the upstream reset API", async () => {
+  const calls = [];
+  const resetCalls = [];
+  let released = false;
+  const client = {
+    async query(sql, params = []) {
+      calls.push({ sql, params });
+      if (sql === "BEGIN" || sql === "COMMIT") return { rows: [], rowCount: 0 };
+      if (sql.includes("pg_try_advisory_xact_lock")) return { rows: [{ acquired: true }], rowCount: 1 };
+      if (sql.includes("WITH today AS")) {
+        return {
+          rowCount: 2,
+          rows: [
+            { id: 101, user_id: 5, group_id: 16 },
+            { id: 102, user_id: 22, group_id: 22 },
+          ],
+        };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    },
+    release() {
+      released = true;
+    },
+  };
+
+  const result = await resetDueDailySubscriptionQuotas({
+    db: { connect: async () => client },
+    batchSize: 50,
+    resetSubscription: async (subscriptionId) => {
+      resetCalls.push(subscriptionId);
+    },
+  });
+
+  assert.deepStrictEqual(result, {
+    skipped: false,
+    reset: 2,
+    failed: 0,
+    subscriptions: [
+      { id: 101, user_id: 5, group_id: 16 },
+      { id: 102, user_id: 22, group_id: 22 },
+    ],
+    failures: [],
+  });
+  assert.equal(released, true);
+  assert.deepStrictEqual(resetCalls, [101, 102]);
+  assert.equal(calls[2].params[0], "Asia/Shanghai");
+  assert.equal(calls[2].params[1], 50);
+  assert.match(calls[2].sql, /daily_window_start < today\.window_start/);
+  assert.match(calls[2].sql, /expires_at > subscription\.starts_at \+ INTERVAL '24 hours'/);
+});
+
+test("daily reset job skips a concurrent runner without updating subscriptions", async () => {
+  const calls = [];
+  const client = {
+    async query(sql) {
+      calls.push(sql);
+      if (sql === "BEGIN" || sql === "COMMIT") return { rows: [], rowCount: 0 };
+      if (sql.includes("pg_try_advisory_xact_lock")) return { rows: [{ acquired: false }], rowCount: 1 };
+      throw new Error(`unexpected SQL: ${sql}`);
+    },
+    release() {},
+  };
+
+  const result = await resetDueDailySubscriptionQuotas({ db: { connect: async () => client } });
+
+  assert.deepStrictEqual(result, { skipped: true, reset: 0, failed: 0, subscriptions: [] });
+  assert.equal(calls.some((sql) => sql.includes("UPDATE user_subscriptions")), false);
+});
+
+test("daily reset job leaves failed resets due for the next poll", async () => {
+  const client = {
+    async query(sql) {
+      if (sql === "BEGIN" || sql === "COMMIT") return { rows: [], rowCount: 0 };
+      if (sql.includes("pg_try_advisory_xact_lock")) return { rows: [{ acquired: true }], rowCount: 1 };
+      if (sql.includes("WITH today AS")) return { rows: [{ id: 101, user_id: 5, group_id: 16 }], rowCount: 1 };
+      throw new Error(`unexpected SQL: ${sql}`);
+    },
+    release() {},
+  };
+
+  const result = await resetDueDailySubscriptionQuotas({
+    db: { connect: async () => client },
+    resetSubscription: async () => {
+      throw new Error("upstream unavailable");
+    },
+  });
+
+  assert.deepStrictEqual(result, {
+    skipped: false,
+    reset: 0,
+    failed: 1,
+    subscriptions: [{ id: 101, user_id: 5, group_id: 16 }],
+    failures: [{ subscriptionId: 101, error: "upstream unavailable" }],
+  });
 });
