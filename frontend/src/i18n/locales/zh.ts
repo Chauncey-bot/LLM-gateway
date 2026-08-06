@@ -1561,6 +1561,7 @@ export default {
         user: '用户',
         email: '邮箱',
         username: '用户名',
+        referrer: '推荐人',
         notes: '备注',
         role: '角色',
         groups: '分组',

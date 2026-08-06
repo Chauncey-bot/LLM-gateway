@@ -48,6 +48,23 @@ export interface AdminUser extends User {
   // Sora 存储配额（字节）
   sora_storage_quota_bytes: number
   sora_storage_used_bytes: number
+  // 推荐人相关信息（由后端返回，字段命名可能因版本不同）
+  referrer_user_id?: number | null
+  referrer_id?: number | null
+  referrer_name?: string | null
+  referrer_username?: string | null
+  referrer_email?: string | null
+  inviter_name?: string | null
+  inviter_email?: string | null
+  recommended_by_name?: string | null
+  recommended_by_email?: string | null
+  referrer?: {
+    id?: number
+    email?: string
+    username?: string
+    name?: string
+  } | null
+  referred_by?: string | number | null
 }
 
 export interface LoginRequest {

@@ -84,6 +84,26 @@ function parseInteger(value) {
   return num;
 }
 
+function parseIdList(value) {
+  const ids = [];
+  if (value == null) {
+    return ids;
+  }
+  const values = Array.isArray(value) ? value : [value];
+  for (const rawValue of values) {
+    const source = String(rawValue || "").trim();
+    if (!source) continue;
+    const parts = source.split(",");
+    for (const part of parts) {
+      const parsed = parsePositiveInteger(part.trim());
+      if (parsed != null) {
+        ids.push(parsed);
+      }
+    }
+  }
+  return Array.from(new Set(ids));
+}
+
 function isAdminRole(role) {
   const normalized = String(role || "").trim().toLowerCase();
   return ["admin", "super_admin", "superadmin", "owner", "root"].includes(normalized);
@@ -1114,20 +1134,40 @@ app.get("/admin/referrals", async (req, res) => {
   const page = Math.max(1, parseInteger(req.query.page) || 1);
   const pageSize = Math.min(100, Math.max(1, parseInteger(req.query.page_size) || 20));
   const offset = (page - 1) * pageSize;
+  const referredUserIds = parseIdList(req.query.referred_user_ids || req.query.referred_user_id);
+  const hasReferrerFilter = referredUserIds.length > 0;
+
+  const whereClauses = [];
+  const queryValues = [];
+  if (hasReferrerFilter) {
+    queryValues.push(referredUserIds);
+    whereClauses.push(`referred_user_id = ANY($${queryValues.length}::bigint[])`);
+  }
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
 
   try {
+    const itemsParams = [
+      ...queryValues,
+      pageSize,
+      offset
+    ];
+    const totalParams = [...queryValues];
     const [itemsResult, totalResult] = await Promise.all([
       pool.query(
         `
         SELECT id, referred_user_id, referrer_user_id, source_code, status,
                bound_at, corrected_by, corrected_at, correct_reason, updated_at
         FROM referral_relationships
+        ${whereSql}
         ORDER BY id DESC
-        LIMIT $1 OFFSET $2
+        LIMIT $${queryValues.length + 1} OFFSET $${queryValues.length + 2}
         `,
-        [pageSize, offset],
+        itemsParams,
       ),
-      pool.query(`SELECT COUNT(*)::int AS count FROM referral_relationships`),
+      pool.query(
+        `SELECT COUNT(*)::int AS count FROM referral_relationships ${whereSql}`,
+        totalParams,
+      ),
     ]);
 
     res.json({

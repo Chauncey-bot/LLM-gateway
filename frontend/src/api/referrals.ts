@@ -92,8 +92,47 @@ export interface RedemptionResult {
   }
 }
 
+export interface AdminReferralItem {
+  id: number
+  referred_user_id: number
+  referrer_user_id: number | null
+  source_code: string
+  status: string
+  bound_at: string | null
+  corrected_by?: number | null
+  corrected_at?: string | null
+  correct_reason?: string | null
+  updated_at?: string | null
+}
+
+export interface AdminReferralListResponse {
+  page: number
+  page_size: number
+  total: number
+  items: AdminReferralItem[]
+  actor?: string | null
+}
+
 export async function getReferralProfile(): Promise<ReferralProfile> {
   const { data } = await rewardsClient.get<ReferralProfile>('/api/referral/me')
+  return data
+}
+
+export async function getAdminReferrals(
+  page = 1,
+  pageSize = 100,
+  referredUserIds?: number[]
+): Promise<AdminReferralListResponse> {
+  const params: Record<string, any> = {
+    page,
+    page_size: Math.min(100, Math.max(1, pageSize))
+  }
+
+  if (referredUserIds && referredUserIds.length > 0) {
+    params.referred_user_ids = referredUserIds.join(',')
+  }
+
+  const { data } = await rewardsClient.get<AdminReferralListResponse>('/admin/referrals', { params })
   return data
 }
 
@@ -132,7 +171,8 @@ export const referralsAPI = {
   bindReferralRegistration,
   getPointsLedger,
   getRedemptionCatalog,
-  redeemWithPoints
+  redeemWithPoints,
+  getAdminReferrals
 }
 
 export default referralsAPI

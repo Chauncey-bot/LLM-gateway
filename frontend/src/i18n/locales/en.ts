@@ -1538,6 +1538,7 @@ export default {
         user: 'User',
         email: 'Email',
         username: 'Username',
+        referrer: 'Referrer',
         notes: 'Notes',
         role: 'Role',
         groups: 'Groups',

@@ -159,6 +159,10 @@ export default defineConfig(function (_a) {
                     target: rewardsBackendUrl,
                     changeOrigin: true
                 },
+                '/admin/referrals': {
+                    target: rewardsBackendUrl,
+                    changeOrigin: true
+                },
                 '/api/points': {
                     target: rewardsBackendUrl,
                     changeOrigin: true

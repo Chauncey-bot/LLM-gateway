@@ -266,6 +266,10 @@
             </div>
           </template>
 
+          <template #cell-referrer="{ row }">
+            <span class="text-sm text-gray-700 dark:text-gray-300">{{ getReferrerText(row) }}</span>
+          </template>
+
           <!-- Dynamic attribute columns -->
           <template
             v-for="def in attributeDefinitions.filter(d => d.enabled)"
@@ -606,6 +610,7 @@ import Icon from '@/components/icons/Icon.vue'
 
 const { t } = useI18n()
 import { adminAPI } from '@/api/admin'
+import { getAdminReferrals, type AdminReferralItem } from '@/api/referrals'
 import type { AdminUser, AdminGroup, UserAttributeDefinition } from '@/types'
 import type { BatchUserUsageStats } from '@/api/admin/dashboard'
 import type { Column } from '@/components/common/types'
@@ -675,11 +680,316 @@ const getAttributeValue = (userId: number, attrId: number): string => {
   return value
 }
 
+const pickEmail = (value: unknown): string | null => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (trimmed.includes('@')) return trimmed
+  }
+  return null
+}
+
+const pickEmailFromObject = (value: Record<string, unknown>): string | null => {
+  if (typeof value !== 'object' || value === null) return null
+
+  const directKeys: string[] = [
+    'email',
+    'user_email',
+    'account_email',
+    'invitee_email',
+    'referrer_email',
+    'inviter_email',
+    'recommended_by_email',
+    'referrer_source_email',
+    'mail',
+    'address'
+  ]
+
+  for (const key of directKeys) {
+    const email = pickEmail(value[key])
+    if (email) return email
+  }
+
+  const nested = [
+    value.user,
+    value.referrer,
+    value.inviter,
+    value.recommended_by,
+    value.account
+  ]
+
+  for (const item of nested) {
+    if (item && typeof item === 'object') {
+      const email = pickEmailFromObject(item as Record<string, unknown>)
+      if (email) return email
+    }
+  }
+
+  return null
+}
+
+const getReferrerUserId = (user: Record<string, unknown>): number | null => {
+  const candidateValues: unknown[] = [
+    user.referrer_user_id,
+    user.referrer_id,
+    user.referred_by,
+    user.referrer,
+    user.inviter_id,
+    user.invited_by_id,
+    user.referred_by_id
+  ]
+
+  for (const candidate of candidateValues) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0) {
+      return candidate
+    }
+
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim()
+      if (trimmed && !trimmed.includes('@')) {
+        const parsed = Number(trimmed)
+        if (Number.isFinite(parsed) && parsed > 0) {
+          return parsed
+        }
+      }
+    }
+
+    if (typeof candidate === 'object' && candidate !== null) {
+      const candidateObj = candidate as Record<string, unknown>
+      const nestedId = candidateObj.id
+      if (typeof nestedId === 'number' && Number.isFinite(nestedId) && nestedId > 0) {
+        return nestedId
+      }
+      if (typeof nestedId === 'string') {
+        const parsed = Number(nestedId.trim())
+        if (Number.isFinite(parsed) && parsed > 0) {
+          return parsed
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+const referrerByReferredUserCache = ref<Record<number, number | null>>({})
+
+const loadReferrerMapFromRewards = async (
+  referredUserIds: Set<number>,
+  signal?: AbortSignal,
+  expectedSeq?: number
+): Promise<Record<number, number | null>> => {
+  if (referredUserIds.size === 0) {
+    return {}
+  }
+
+  const result: Record<number, number | null> = {}
+  const pending = new Set(referredUserIds)
+  let page = 1
+
+  const maxPageSize = 100
+
+  while (pending.size > 0) {
+    if (signal?.aborted) {
+      return result
+    }
+    if (typeof expectedSeq === 'number' && expectedSeq !== referrerLookupSeq.value) {
+      return result
+    }
+
+    const response = await getAdminReferrals(page, maxPageSize, Array.from(pending))
+    const items: AdminReferralItem[] = response.items || []
+
+    for (const item of items) {
+      const referredId = Number(item.referred_user_id)
+      if (!Number.isFinite(referredId) || !pending.has(referredId)) {
+        continue
+      }
+
+      const referrerId = Number(item.referrer_user_id)
+      if (Number.isFinite(referrerId) && referrerId > 0) {
+        result[referredId] = referrerId
+      } else {
+        result[referredId] = null
+      }
+
+      pending.delete(referredId)
+      if (pending.size === 0) {
+        break
+      }
+    }
+
+    const totalPages = Math.ceil((Number(response.total || 0) || 0) / Math.max(1, Number(response.page_size || 0)))
+    if (!Number.isFinite(totalPages) || totalPages <= 0) {
+      break
+    }
+
+    const hasMorePages = response.page < totalPages
+    if (!hasMorePages) {
+      break
+    }
+    page += 1
+  }
+
+  pending.forEach((id) => {
+    result[id] = null
+  })
+
+  return result
+}
+
+const getReferrerText = (user: AdminUser): string => {
+  const anyUser = user as AdminUser & Record<string, unknown>
+
+  const referrerUserId = getReferrerUserId(anyUser)
+  const emailCandidates = [
+    anyUser.invited_by_email,
+    anyUser.referrer_email,
+    anyUser.recommended_by_email,
+    anyUser.inviter_email,
+    anyUser.referrer_account_email,
+    anyUser.referrer_user_email,
+    anyUser.referrer_source_email,
+    anyUser.referred_by
+  ]
+
+  for (const value of emailCandidates) {
+    const email = pickEmail(value)
+    if (email) {
+      return email
+    }
+  }
+
+  const resolvedId = referrerUserId && referrerUserId > 0 ? referrerUserId : null
+  if (resolvedId && referrerEmailCache.value[resolvedId]) {
+    return referrerEmailCache.value[resolvedId]
+  }
+
+  const mappedReferrerId = referrerByReferredUserCache.value[user.id]
+  if (mappedReferrerId && mappedReferrerId > 0) {
+    const cached = referrerEmailCache.value[mappedReferrerId]
+    if (cached) {
+      return cached
+    }
+  }
+
+  const referrer = anyUser.referrer
+  if (typeof referrer === 'object' && referrer !== null) {
+    const candidate = referrer as Record<string, unknown>
+    const referrerEmail = pickEmailFromObject(candidate)
+    if (referrerEmail) return referrerEmail
+  }
+
+  const nestedReferrerCandidates = [
+    anyUser.referred_by,
+    anyUser.recommended_by,
+    anyUser.inviter,
+    anyUser.referrer_user,
+    anyUser.invited_by
+  ]
+
+  for (const candidate of nestedReferrerCandidates) {
+    if (candidate && typeof candidate === 'object') {
+      const nestedReferrer = pickEmailFromObject(candidate as Record<string, unknown>)
+      if (nestedReferrer) return nestedReferrer
+    }
+  }
+
+  if (resolvedId && referrerEmailCache.value[resolvedId]) {
+    return referrerEmailCache.value[resolvedId]
+  }
+
+  return '-'
+}
+
+const loadReferrerEmails = async (usersToResolve: AdminUser[], signal?: AbortSignal, expectedSeq?: number) => {
+  const ids = new Set<number>()
+  const usersNeedingReferralLookup = new Set<number>()
+
+  for (const row of usersToResolve) {
+    const id = getReferrerUserId(row as AdminUser & Record<string, unknown>)
+    if (!id) {
+      if (referrerByReferredUserCache.value[row.id] !== undefined) {
+        continue
+      }
+      usersNeedingReferralLookup.add(row.id)
+      continue
+    }
+    if (referrerEmailCache.value[id]) {
+      continue
+    }
+    if (id === row.id) {
+      referrerByReferredUserCache.value[row.id] = null
+      continue
+    }
+    ids.add(id)
+  }
+
+  if (usersNeedingReferralLookup.size > 0) {
+    const mapping = await loadReferrerMapFromRewards(usersNeedingReferralLookup, signal, expectedSeq)
+    referrerByReferredUserCache.value = {
+      ...referrerByReferredUserCache.value,
+      ...mapping
+    }
+
+    Object.entries(mapping).forEach(([referredUserId, referrerUserId]) => {
+      const referredId = Number(referredUserId)
+      if (Number.isFinite(referredId) && referrerUserId && referrerUserId > 0 && !referrerEmailCache.value[referrerUserId]) {
+        ids.add(referrerUserId)
+      }
+    })
+  }
+
+  const uniqueIds = Array.from(ids)
+  if (uniqueIds.length === 0) {
+    return
+  }
+
+  try {
+    let updated = false
+    const results = await Promise.allSettled(
+      uniqueIds.map((id) => adminAPI.users.getById(id))
+    )
+
+    if (signal?.aborted) {
+      return
+    }
+    if (typeof expectedSeq === 'number' && expectedSeq !== referrerLookupSeq.value) {
+      return
+    }
+
+    for (let i = 0; i < uniqueIds.length; i++) {
+      const result = results[i]
+      const id = uniqueIds[i]
+      if (result.status === 'fulfilled') {
+        const email = pickEmail(result.value?.email)
+        if (email) {
+          updated = true
+          referrerEmailCache.value = {
+            ...referrerEmailCache.value,
+            [id]: email
+          }
+        }
+      }
+    }
+
+    if (updated) {
+      users.value = [...users.value]
+    }
+  } catch (error) {
+    if (signal?.aborted) {
+      return
+    }
+    console.error('Failed to load referrer emails:', error)
+  }
+}
+
 // All possible columns (for column settings)
 const allColumns = computed<Column[]>(() => [
   { key: 'email', label: t('admin.users.columns.user'), sortable: true },
   { key: 'id', label: 'ID', sortable: true },
   { key: 'username', label: t('admin.users.columns.username'), sortable: true },
+  { key: 'referrer', label: t('admin.users.columns.referrer'), sortable: false },
   { key: 'notes', label: t('admin.users.columns.notes'), sortable: false },
   // Dynamic attribute columns
   ...attributeColumns.value,
@@ -773,6 +1083,8 @@ const columns = computed<Column[]>(() =>
 
 const users = ref<AdminUser[]>([])
 const loading = ref(false)
+const referrerEmailCache = ref<Record<number, string>>({})
+const referrerLookupSeq = ref(0)
 const searchQuery = ref('')
 
 // Groups data for the groups column
@@ -1137,7 +1449,8 @@ const loadUsers = async () => {
     pagination.pages = response.pages
     usageStats.value = {}
     userAttributeValues.value = {}
-
+    const seq = ++referrerLookupSeq.value
+    void loadReferrerEmails(response.items, signal, seq)
     // Defer heavy secondary data so table can render first.
     if (response.items.length > 0) {
       const userIds = response.items.map((u) => u.id)
