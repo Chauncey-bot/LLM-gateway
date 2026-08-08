@@ -50,6 +50,7 @@ export interface PaymentCatalogResponse {
 
 export interface PaymentDailyQuotaResponse {
   quotaDailyLimit: number
+  quotaDailyUsage: number
   trafficPackExpiresAt: string | null
 }
 

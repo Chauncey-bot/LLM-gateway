@@ -14,6 +14,7 @@ import {
   calculateTrafficPackPurchaseQuota,
   TRAFFIC_PACK_STATUS,
 } from "./traffic-pack-state.mjs";
+import { calculatePlanDailyQuotaProfile } from "./traffic-pack-plan-state.mjs";
 
 const { Pool } = pg;
 
@@ -427,6 +428,40 @@ async function initDb() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_traffic_pack_events_user_id_created_at ON traffic_pack_events (user_id, created_at DESC);`);
+  // This ledger is owned by the payment domain.  Sub2API is deliberately not
+  // extended: the external quota gateway is the only writer/reader for API
+  // request enforcement, while this service is the entitlement source.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS traffic_pack_quota_states (
+      user_id BIGINT PRIMARY KEY,
+      daily_window_start DATE NOT NULL,
+      base_daily_quota_usd NUMERIC(20,8) NOT NULL DEFAULT 0,
+      renewal_daily_quota_usd NUMERIC(20,8) NOT NULL DEFAULT 0,
+      effective_daily_quota_usd NUMERIC(20,8) NOT NULL DEFAULT 0,
+      daily_usage_usd NUMERIC(20,8) NOT NULL DEFAULT 0,
+      reserved_usage_usd NUMERIC(20,8) NOT NULL DEFAULT 0,
+      traffic_pack_expires_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`ALTER TABLE traffic_pack_quota_states ADD COLUMN IF NOT EXISTS renewal_daily_quota_usd NUMERIC(20,8) NOT NULL DEFAULT 0;`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS traffic_pack_quota_holds (
+      request_id UUID PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      api_key_id BIGINT NOT NULL,
+      daily_window_start DATE,
+      reserved_usd NUMERIC(20,8) NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      actual_usage_usd NUMERIC(20,8),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      settled_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ NOT NULL
+    );
+  `);
+  await pool.query(`ALTER TABLE traffic_pack_quota_holds ADD COLUMN IF NOT EXISTS daily_window_start DATE;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_traffic_pack_quota_holds_pending ON traffic_pack_quota_holds (status, expires_at);`);
   await pool.query(
     `CREATE INDEX IF NOT EXISTS idx_payment_orders_traffic_pack_reclaim ON payment_orders (traffic_pack_expires_at)\n   WHERE sku_type = 'traffic' AND COALESCE(traffic_pack_reverted, false) = false;`,
   );
@@ -845,6 +880,52 @@ async function upsertUserDailyQuotaExtension(client, userId, quotaDailyLimit) {
   );
 }
 
+async function upsertTrafficPackQuotaState(client, userId, {
+  baseDailyQuota,
+  renewalDailyQuota = baseDailyQuota,
+  effectiveDailyQuota,
+  expiresAt = null,
+  resetDailyUsage = false,
+}) {
+  const { rows } = await client.query(
+    `
+    INSERT INTO traffic_pack_quota_states (
+      user_id, daily_window_start, base_daily_quota_usd, renewal_daily_quota_usd, effective_daily_quota_usd,
+      daily_usage_usd, reserved_usage_usd, traffic_pack_expires_at
+    )
+    VALUES (
+      $1,
+      (NOW() AT TIME ZONE 'Asia/Shanghai')::date,
+      $2, $3, $4, 0, 0, $5
+    )
+    ON CONFLICT (user_id) DO UPDATE
+    SET daily_window_start = EXCLUDED.daily_window_start,
+        base_daily_quota_usd = EXCLUDED.base_daily_quota_usd,
+        renewal_daily_quota_usd = EXCLUDED.renewal_daily_quota_usd,
+        effective_daily_quota_usd = EXCLUDED.effective_daily_quota_usd,
+        daily_usage_usd = CASE
+          WHEN traffic_pack_quota_states.daily_window_start < EXCLUDED.daily_window_start OR $6
+          THEN 0 ELSE traffic_pack_quota_states.daily_usage_usd END,
+        reserved_usage_usd = CASE
+          WHEN traffic_pack_quota_states.daily_window_start < EXCLUDED.daily_window_start OR $6
+          THEN 0 ELSE traffic_pack_quota_states.reserved_usage_usd END,
+        traffic_pack_expires_at = EXCLUDED.traffic_pack_expires_at,
+        updated_at = NOW()
+    RETURNING *
+    `,
+    [Number(userId), Number(baseDailyQuota), Number(renewalDailyQuota), Number(effectiveDailyQuota), expiresAt, Boolean(resetDailyUsage)],
+  );
+  if (resetDailyUsage) {
+    await client.query(
+      `UPDATE traffic_pack_quota_holds
+          SET status = 'released', settled_at = NOW()
+        WHERE user_id = $1 AND status = 'pending'`,
+      [Number(userId)],
+    );
+  }
+  return rows[0] || null;
+}
+
 async function lockTrafficPackUser(client, userId) {
   // A user can complete payments through notify, polling, or a manual retry at
   // the same time. Serialize the read-modify-write quota update across all of
@@ -852,31 +933,22 @@ async function lockTrafficPackUser(client, userId) {
   await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [Number(userId)]);
 }
 
-async function getActiveSubscriptionDailyLimit(userId) {
+async function getCurrentPlanDailyQuotaProfile(userId) {
   const subscriptions = await listUserSubscriptions(userId);
-  const activeLimits = subscriptions
-    .filter((subscription) => subscription && subscription.status === "active")
-    .map((subscription) => parseDecimalNumber(subscription?.group?.daily_limit_usd))
-    .filter((limit) => Number.isFinite(limit) && limit > 0);
-
-  if (!activeLimits.length) {
-    return null;
-  }
-
-  return Math.max(...activeLimits);
+  return calculatePlanDailyQuotaProfile(subscriptions);
 }
 
 async function getCurrentPlanDailyQuota(userId, { required = true } = {}) {
-  const subscriptionDailyLimit = await getActiveSubscriptionDailyLimit(userId);
-  if (subscriptionDailyLimit !== null) {
-    return subscriptionDailyLimit;
+  const profile = await getCurrentPlanDailyQuotaProfile(userId);
+  if (profile.currentDailyQuota > 0) {
+    return profile.currentDailyQuota;
   }
   if (!required) {
     return 0;
   }
   return resolveTrafficPackBaseDailyQuota({
     extensionDailyLimit: null,
-    subscriptionDailyLimit,
+    subscriptionDailyLimit: null,
   });
 }
 
@@ -926,7 +998,11 @@ async function recordTrafficPackEvent(client, {
 }
 
 async function synchronizeEffectiveDailyQuota(client, userId, { requiredPlan = false } = {}) {
-  const baseDailyQuota = await getCurrentPlanDailyQuota(userId, { required: requiredPlan });
+  const planProfile = await getCurrentPlanDailyQuotaProfile(userId);
+  const baseDailyQuota = planProfile.currentDailyQuota;
+  if (requiredPlan && baseDailyQuota <= 0) {
+    throw new Error("User does not have a finite current daily quota limit");
+  }
   const packs = await listAppliedTrafficPacks(client, userId, { forUpdate: true });
   const quota = calculateEffectiveDailyQuota({
     baseDailyQuota,
@@ -936,7 +1012,18 @@ async function synchronizeEffectiveDailyQuota(client, userId, { requiredPlan = f
   // If the plan expired, do not leave a temporary pack as the effective limit.
   const effectiveDailyQuota = baseDailyQuota > 0 ? quota.effectiveDailyQuota : 0;
   await upsertUserDailyQuotaExtension(client, userId, effectiveDailyQuota);
-  return { ...quota, effectiveDailyQuota, packs };
+  const expiresAt = packs.reduce((latest, pack) => {
+    const candidate = new Date(pack.traffic_pack_expires_at);
+    if (!Number.isFinite(candidate.getTime())) return latest;
+    return !latest || candidate > latest ? candidate : latest;
+  }, null);
+  const quotaState = await upsertTrafficPackQuotaState(client, userId, {
+    baseDailyQuota,
+    renewalDailyQuota: planProfile.renewalDailyQuota,
+    effectiveDailyQuota,
+    expiresAt,
+  });
+  return { ...quota, effectiveDailyQuota, packs, quotaState };
 }
 
 async function queryTrade(order) {
@@ -1025,7 +1112,11 @@ async function applyTrafficPackOrder(order, client) {
   // The subscription is always the source of the base quota. user_extensions
   // is only a projection of the currently effective quota, so an empty or
   // stale extension can never become a traffic-pack baseline.
-  const baseDailyQuota = await getCurrentPlanDailyQuota(order.user_id, { required: true });
+  const planProfile = await getCurrentPlanDailyQuotaProfile(order.user_id);
+  const baseDailyQuota = planProfile.currentDailyQuota;
+  if (baseDailyQuota <= 0) {
+    throw new Error("User does not have a finite current daily quota limit");
+  }
   const activePacks = await listAppliedTrafficPacks(client, order.user_id, { forUpdate: true });
   const { newDailyQuota } = calculateTrafficPackPurchaseQuota({
     baseDailyQuota,
@@ -1068,6 +1159,12 @@ async function applyTrafficPackOrder(order, client) {
     baseDailyQuota,
     effectiveDailyQuota: newDailyQuota,
     details: { bonusQuotaUsd, expiresAt: expiresAt.toISOString() },
+  });
+  await upsertTrafficPackQuotaState(client, order.user_id, {
+    baseDailyQuota,
+    renewalDailyQuota: planProfile.renewalDailyQuota,
+    effectiveDailyQuota: newDailyQuota,
+    expiresAt,
   });
   return update.rows[0];
 }
@@ -1128,9 +1225,16 @@ async function reclaimExpiredTrafficPacksForUser(client, userId) {
 async function resetActiveTrafficPacksForUser(client, userId) {
   await reclaimExpiredTrafficPacksForUser(client, userId);
   const rows = await listAppliedTrafficPacks(client, userId, { forUpdate: true });
-  const baselineDailyQuota = await getCurrentPlanDailyQuota(userId, { required: false });
+  const planProfile = await getCurrentPlanDailyQuotaProfile(userId);
+  const baselineDailyQuota = planProfile.currentDailyQuota;
   if (!rows.length) {
     await upsertUserDailyQuotaExtension(client, userId, baselineDailyQuota);
+    await upsertTrafficPackQuotaState(client, userId, {
+      baseDailyQuota: baselineDailyQuota,
+      renewalDailyQuota: planProfile.renewalDailyQuota,
+      effectiveDailyQuota: baselineDailyQuota,
+      resetDailyUsage: true,
+    });
     return { restored: false, baselineDailyQuota, reverted: 0 };
   }
 
@@ -1158,6 +1262,12 @@ async function resetActiveTrafficPacksForUser(client, userId) {
     ],
   );
   await upsertUserDailyQuotaExtension(client, userId, baselineDailyQuota);
+  await upsertTrafficPackQuotaState(client, userId, {
+    baseDailyQuota: baselineDailyQuota,
+    renewalDailyQuota: planProfile.renewalDailyQuota,
+    effectiveDailyQuota: baselineDailyQuota,
+    resetDailyUsage: true,
+  });
   for (const row of rows) {
     await recordTrafficPackEvent(client, {
       userId,
@@ -1808,6 +1918,7 @@ app.get("/pay-api/daily-quota", async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json({
       quotaDailyLimit: quota.effectiveDailyQuota,
+      quotaDailyUsage: Number(quota.quotaState?.daily_usage_usd || 0),
       trafficPackExpiresAt: rows[0]?.traffic_pack_expires_at || null,
     });
   } catch (error) {
@@ -1831,7 +1942,7 @@ app.post("/pay-api/orders", async (req, res) => {
       return jsonError(res, 400, "Invalid or disabled skuCode");
     }
     const isTrafficPack = sku.type === "traffic";
-    if (isTrafficPack && (await getActiveSubscriptionDailyLimit(user.id)) === null) {
+    if (isTrafficPack && (await getCurrentPlanDailyQuotaProfile(user.id)).currentDailyQuota <= 0) {
       return jsonError(res, 400, "An active subscription with a finite daily quota is required for traffic packs");
     }
     const merchantOrderId = generateMerchantOrderId();

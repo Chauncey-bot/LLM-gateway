@@ -114,7 +114,7 @@
                   {{ t('userSubscriptions.daily') }}
                 </span>
                 <span class="text-sm text-gray-500 dark:text-dark-400">
-                  ${{ (subscription.daily_usage_usd || 0).toFixed(2) }} / ${{
+                  ${{ getEffectiveDailyUsage(subscription).toFixed(2) }} / ${{
                     getEffectiveDailyLimit(subscription).toFixed(2)
                   }}
                 </span>
@@ -124,13 +124,13 @@
                   class="absolute inset-y-0 left-0 rounded-full transition-all duration-300"
                   :class="
                     getProgressBarClass(
-                      subscription.daily_usage_usd,
+                      getEffectiveDailyUsage(subscription),
                       getEffectiveDailyLimit(subscription)
                     )
                   "
                   :style="{
                     width: getProgressWidth(
-                      subscription.daily_usage_usd,
+                      getEffectiveDailyUsage(subscription),
                       getEffectiveDailyLimit(subscription)
                     )
                   }"
@@ -335,6 +335,7 @@ const activeTrafficPack = ref<ActiveTrafficPack | null>(null)
 // not the traffic-pack bonus. Keep that distinction so it is never added to
 // the subscription base a second time.
 const currentDailyQuota = ref<number | null>(null)
+const currentDailyUsage = ref<number | null>(null)
 const dailyQuotaExpiresAt = ref<string | null>(null)
 const activeSubscriptions = computed(() =>
   subscriptions.value.filter((subscription) => {
@@ -380,10 +381,12 @@ async function loadSubscriptions() {
       ])
       activeTrafficPack.value = getActiveTrafficPack(orders)
       currentDailyQuota.value = Number(quota.quotaDailyLimit)
+      currentDailyUsage.value = Number(quota.quotaDailyUsage)
       dailyQuotaExpiresAt.value = quota.trafficPackExpiresAt
     } catch (error) {
       activeTrafficPack.value = null
       currentDailyQuota.value = null
+      currentDailyUsage.value = null
       dailyQuotaExpiresAt.value = null
       console.warn('Failed to load traffic pack status:', error)
     }
@@ -442,6 +445,13 @@ function getEffectiveDailyLimit(subscription: UserSubscription): number {
   }
 
   return baseDailyLimit
+}
+
+function getEffectiveDailyUsage(subscription: UserSubscription): number {
+  if (activeTrafficPack.value && currentDailyUsage.value !== null) {
+    return currentDailyUsage.value
+  }
+  return Number(subscription.daily_usage_usd || 0)
 }
 
 function formatTimeUntilNextMidnight(): string {

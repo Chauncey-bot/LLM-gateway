@@ -1,16 +1,11 @@
 services:
-  zhisales-pay:
-    image: zhisales-pay-service:latest
+  quota-gateway:
     build: .
     restart: unless-stopped
     env_file:
       - .env
     ports:
-      - "127.0.0.1:18190:3000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - ./catalog.json:/app/catalog.json
+      - "127.0.0.1:18193:18193"
     networks:
       - sub2api-net
 

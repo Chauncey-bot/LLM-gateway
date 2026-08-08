@@ -63,6 +63,14 @@ function startOfDay(date = new Date()) {
   return target;
 }
 
+async function getDailyWindowStart(client = pool) {
+  const result = await client.query(
+    `SELECT (date_trunc('day', NOW() AT TIME ZONE $1) AT TIME ZONE $1) AS window_start`,
+    [config.dailyResetTimeZone],
+  );
+  return result.rows[0]?.window_start;
+}
+
 /**
  * Restores every due multi-day subscription to its plan's daily baseline.
  *
@@ -290,10 +298,26 @@ async function sub2apiAdminJson(pathname, options = {}) {
 }
 
 async function resetSubscriptionDailyQuota(subscriptionId) {
-  return sub2apiAdminJson(`/api/v1/admin/subscriptions/${Number(subscriptionId)}/reset-quota`, {
+  const normalizedSubscriptionId = Number(subscriptionId);
+  const result = await sub2apiAdminJson(`/api/v1/admin/subscriptions/${normalizedSubscriptionId}/reset-quota`, {
     method: "POST",
     body: { daily: true },
   });
+
+  // The upstream service runs in UTC and writes its local midnight (08:00 in
+  // China) to daily_window_start. Normalize it after the upstream reset so
+  // both the actual quota window and every countdown use China midnight.
+  const windowStart = await getDailyWindowStart();
+  if (!windowStart) {
+    throw new ServiceError(500, "Unable to determine daily quota window start");
+  }
+  await pool.query(
+    `UPDATE user_subscriptions
+     SET daily_window_start = $2, updated_at = NOW()
+     WHERE id = $1 AND deleted_at IS NULL`,
+    [normalizedSubscriptionId, windowStart],
+  );
+  return result;
 }
 
 async function payServiceAdminJson(pathname, options = {}) {
@@ -422,7 +446,10 @@ async function resetQuotaAndShortenSubscription(subscriptionId, userId, resetReq
       throw new ServiceError(409, `Subscription must remain active for at least ${config.minimumRemainingHours} hours`);
     }
 
-    const todayStart = startOfDay();
+    const todayStart = await getDailyWindowStart(client);
+    if (!todayStart) {
+      throw new ServiceError(500, "Unable to determine daily quota window start");
+    }
     const updated = await client.query(
       `UPDATE user_subscriptions
        SET daily_usage_usd = CASE WHEN $2 THEN 0 ELSE daily_usage_usd END,
@@ -506,6 +533,7 @@ export {
   normalizeRemainingMs,
   MINIMUM_REMAINING_HOURS,
   resetDueDailySubscriptionQuotas,
+  getDailyWindowStart,
   startOfDay,
   startDailyQuotaResetPoller,
   normalizeResetWindowRequest,

@@ -5,7 +5,7 @@ process.env.SUB2API_ADMIN_EMAIL = "test-admin@example.com";
 process.env.SUB2API_ADMIN_PASSWORD = "test-password";
 
 const originalFetch = globalThis.fetch;
-globalThis.fetch = async (url) => {
+globalThis.fetch = async (url, options = {}) => {
   const pathname = new URL(url).pathname;
   if (pathname === "/api/v1/auth/login") {
     return Response.json({ access_token: "test-admin-token", expires_in: 3600 });
@@ -56,6 +56,16 @@ class TrafficPackFulfillmentClient {
       this.effectiveQuota = Number(params[1]);
       return { rows: [] };
     }
+    if (statement.startsWith("INSERT INTO traffic_pack_quota_states")) {
+      return {
+        rows: [{
+          user_id: params[0],
+          base_daily_quota_usd: params[1],
+          effective_daily_quota_usd: params[2],
+          daily_usage_usd: 0,
+        }],
+      };
+    }
     if (statement.startsWith("UPDATE payment_orders") && statement.includes("traffic_pack_bonus_usd")) {
       this.order = {
         ...this.order,
@@ -104,6 +114,10 @@ test("a paid traffic-pack order is automatically fulfilled from the active subsc
     assert.equal(fulfilled.traffic_pack_bonus_usd, 100);
     assert.equal(fulfilled.traffic_pack_status, "applied");
     assert.equal(client.effectiveQuota, 2900);
+    assert.equal(
+      client.commands.some((command) => command.startsWith("INSERT INTO traffic_pack_quota_states")),
+      true,
+    );
     assert.deepEqual(client.events, [
       {
         userId: 22,

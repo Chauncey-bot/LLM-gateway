@@ -6,6 +6,7 @@ import {
   normalizeResetWindowRequest,
   normalizeRemainingMs,
   ServiceError,
+  getDailyWindowStart,
   parseIntId,
   resetDueDailySubscriptionQuotas,
   startOfDay,
@@ -76,6 +77,22 @@ test("startOfDay does not mutate input date", () => {
   const normalized = startOfDay(before);
   assert.equal(before.getTime(), beforeSnapshot);
   assert.equal(normalized.getTime() < before.getTime(), true);
+});
+
+test("getDailyWindowStart delegates midnight calculation to PostgreSQL in the configured timezone", async () => {
+  const calls = [];
+  const windowStart = "2026-08-06T00:00:00.000+08:00";
+  const value = await getDailyWindowStart({
+    async query(sql, params) {
+      calls.push({ sql, params });
+      return { rows: [{ window_start: windowStart }] };
+    },
+  });
+
+  assert.equal(value, windowStart);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].sql, /date_trunc\('day', NOW\(\) AT TIME ZONE \$1\)/);
+  assert.deepStrictEqual(calls[0].params, ["Asia/Shanghai"]);
 });
 
 test("daily reset job finds due multi-day subscriptions and uses the upstream reset API", async () => {
