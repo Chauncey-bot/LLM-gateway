@@ -136,11 +136,11 @@
                 {{ t('usage.totalCost') }}
               </p>
               <p class="text-xl font-bold text-green-600 dark:text-green-400">
-                ${{ (usageStats?.total_actual_cost || 0).toFixed(4) }}
+                ${{ getUsageActualCost(usageStats).toFixed(4) }}
               </p>
               <p class="text-xs text-gray-500 dark:text-gray-400">
                 {{ t('usage.actualCost') }} /
-                <span class="line-through">${{ (usageStats?.total_cost || 0).toFixed(4) }}</span>
+                <span class="line-through">${{ getUsageStandardCost(usageStats).toFixed(4) }}</span>
                 {{ t('usage.standardCost') }}
               </p>
             </div>
@@ -460,7 +460,7 @@
           <template #cell-cost="{ row }">
             <div class="flex items-center gap-1.5 text-sm">
               <span class="font-medium text-green-600 dark:text-green-400">
-                ${{ row.actual_cost.toFixed(6) }}
+                ${{ getLogActualCost(row).toFixed(6) }}
               </span>
               <!-- Cost Detail Tooltip -->
               <div
@@ -658,12 +658,12 @@
           </div>
           <div class="flex items-center justify-between gap-6">
             <span class="text-gray-400">{{ t('usage.original') }}</span>
-            <span class="font-medium text-white">${{ tooltipData?.total_cost.toFixed(6) }}</span>
+            <span class="font-medium text-white">${{ getLogStandardCost(tooltipData).toFixed(6) }}</span>
           </div>
           <div class="flex items-center justify-between gap-6 border-t border-gray-700 pt-1.5">
             <span class="text-gray-400">{{ t('usage.billed') }}</span>
             <span class="font-semibold text-green-400"
-              >${{ tooltipData?.actual_cost.toFixed(6) }}</span
+              >${{ getLogActualCost(tooltipData).toFixed(6) }}</span
             >
           </div>
         </div>
@@ -861,6 +861,63 @@ const chartColors = [
 
 const keySpendChartColors = chartColors
 
+const normalizeNumber = (value: unknown): number => {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+const getLogActualCost = (log: UsageLog | null | undefined): number => {
+  const record = log as
+    | {
+        actual_cost?: unknown
+        total_cost?: unknown
+        cost?: unknown
+      }
+    | undefined
+  return normalizeNumber(record?.actual_cost ?? record?.total_cost ?? record?.cost)
+}
+
+const getLogStandardCost = (log: UsageLog | null | undefined): number => {
+  const record = log as
+    | {
+        total_cost?: unknown
+        total_standard_cost?: unknown
+        standard_cost?: unknown
+        actual_cost?: unknown
+        cost?: unknown
+      }
+    | undefined
+  return normalizeNumber(
+    record?.total_cost ??
+      record?.total_standard_cost ??
+      record?.standard_cost ??
+      record?.actual_cost ??
+      record?.cost
+  )
+}
+
+const getUsageActualCost = (stats: UsageStatsResponse | null): number => {
+  const record = stats as
+    | {
+        total_actual_cost?: unknown
+        total_cost?: unknown
+      }
+    | null
+    | undefined
+  return normalizeNumber(record?.total_actual_cost ?? record?.total_cost)
+}
+
+const getUsageStandardCost = (stats: UsageStatsResponse | null): number => {
+  const record = stats as
+    | {
+        total_cost?: unknown
+        total_actual_cost?: unknown
+      }
+    | null
+    | undefined
+  return normalizeNumber(record?.total_cost ?? record?.total_actual_cost)
+}
+
 const getTotalTokens = (log: UsageLog): number =>
   Number(log.input_tokens || 0) +
   Number(log.output_tokens || 0) +
@@ -879,8 +936,8 @@ const modelDistributionStats = computed<ModelStat[]>(() => {
       existing.cache_creation_tokens += Number(log.cache_creation_tokens || 0)
       existing.cache_read_tokens += Number(log.cache_read_tokens || 0)
       existing.total_tokens += getTotalTokens(log)
-      existing.cost += Number(log.total_cost || 0)
-      existing.actual_cost += Number(log.actual_cost || 0)
+      existing.cost += getLogStandardCost(log)
+      existing.actual_cost += getLogActualCost(log)
     } else {
       byModel.set(model, {
         model,
@@ -890,8 +947,8 @@ const modelDistributionStats = computed<ModelStat[]>(() => {
         cache_creation_tokens: Number(log.cache_creation_tokens || 0),
         cache_read_tokens: Number(log.cache_read_tokens || 0),
         total_tokens: getTotalTokens(log),
-        cost: Number(log.total_cost || 0),
-        actual_cost: Number(log.actual_cost || 0)
+        cost: getLogStandardCost(log),
+        actual_cost: getLogActualCost(log)
       })
     }
   }
@@ -1149,14 +1206,14 @@ const loadKeySpendDistribution = async () => {
         `#${apiKeyId}`
       if (existing) {
         existing.requests += 1
-        existing.actualCost += Number(log.actual_cost || 0)
+        existing.actualCost += getLogActualCost(log)
       } else {
         byKey.set(key, {
           key,
           apiKeyId,
           name,
           requests: 1,
-          actualCost: Number(log.actual_cost || 0)
+          actualCost: getLogActualCost(log)
         })
       }
     }
@@ -1299,8 +1356,8 @@ const exportToCSV = async () => {
         log.cache_read_tokens,
         log.cache_creation_tokens,
         log.rate_multiplier,
-        log.actual_cost.toFixed(8),
-        log.total_cost.toFixed(8),
+        getLogActualCost(log).toFixed(8),
+        getLogStandardCost(log).toFixed(8),
         log.first_token_ms ?? '',
         log.duration_ms
       ].map(escapeCSVValue)
