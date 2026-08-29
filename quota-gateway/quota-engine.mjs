@@ -1,12 +1,16 @@
 const CHINA_TIME_ZONE = "Asia/Shanghai";
 
 export function chinaDay(now = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", {
+  const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: CHINA_TIME_ZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(now);
+  }).formatToParts(now).reduce((result, part) => {
+    if (part.type === "year" || part.type === "month" || part.type === "day") result[part.type] = part.value;
+    return result;
+  }, {});
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 export function normalizeQuotaState(state, now = new Date()) {
@@ -50,14 +54,16 @@ export function decideReservation(state, amountUsd, now = new Date()) {
   };
 }
 
-export function estimateReservationUsd({ contentLength = 0, body = null, defaultHoldUsd = 5, maxUsdPer1kTokens = 0.1 } = {}) {
+export function estimateReservationUsd({ contentLength = 0, body = null, defaultHoldUsd = 5, maxUsdPer1kTokens = 0.1, maxHoldUsd = 10 } = {}) {
   let maxTokens = 0;
   if (body && typeof body === "object") {
     maxTokens = Number(body.max_tokens ?? body.max_completion_tokens ?? body.max_output_tokens ?? 0);
   }
   const inputTokens = Math.ceil(Math.max(0, Number(contentLength) || 0) / 4);
   const estimated = ((inputTokens + Math.max(0, maxTokens)) / 1000) * maxUsdPer1kTokens;
-  return Math.max(Number(defaultHoldUsd) || 0.01, estimated, 0.01);
+  const floor = Math.max(Number(defaultHoldUsd) || 0.01, 0.01);
+  const ceiling = Math.max(Number(maxHoldUsd) || floor, floor);
+  return Math.min(ceiling, Math.max(floor, estimated, 0.01));
 }
 
 function parseStateDay(state) {

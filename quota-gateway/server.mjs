@@ -27,6 +27,7 @@ const config = {
   },
   internalKey: process.env.QUOTA_GATEWAY_INTERNAL_KEY || "",
   defaultHoldUsd: Number(process.env.QUOTA_GATEWAY_DEFAULT_HOLD_USD || 5),
+  maxHoldUsd: Number(process.env.QUOTA_GATEWAY_MAX_HOLD_USD || 10),
   maxUsdPer1kTokens: Number(process.env.QUOTA_GATEWAY_MAX_USD_PER_1K_TOKENS || 0.1),
   usagePollDelayMs: Number(process.env.QUOTA_GATEWAY_USAGE_POLL_DELAY_MS || 1_000),
   usagePollAttempts: Number(process.env.QUOTA_GATEWAY_USAGE_POLL_ATTEMPTS || 10),
@@ -82,9 +83,12 @@ function jsonError(res, status, message) {
 
 function dbRowToState(row) {
   if (!row) return null;
+  const dailyWindowStart = row.daily_window_start instanceof Date
+    ? row.daily_window_start.toISOString().slice(0, 10)
+    : String(row.daily_window_start).slice(0, 10);
   return {
     userId: Number(row.user_id),
-    dailyWindowStart: String(row.daily_window_start).slice(0, 10),
+    dailyWindowStart,
     baseDailyQuota: Number(row.base_daily_quota_usd),
     renewalDailyQuota: Number(row.renewal_daily_quota_usd),
     effectiveDailyQuota: Number(row.effective_daily_quota_usd),
@@ -256,7 +260,7 @@ function createProxyHandler({ quotaDb, upstreamDb }) {
     const contentType = req.get("content-type") || "";
     if (contentType.includes("application/json") && req.body && typeof req.body === "object") body = req.body;
     const estimatedUsd = estimateReservationUsd({
-      contentLength: req.get("content-length"), body, defaultHoldUsd: config.defaultHoldUsd, maxUsdPer1kTokens: config.maxUsdPer1kTokens,
+      contentLength: req.get("content-length"), body, defaultHoldUsd: config.defaultHoldUsd, maxHoldUsd: config.maxHoldUsd, maxUsdPer1kTokens: config.maxUsdPer1kTokens,
     });
     const hold = await reserveQuota(quotaDb, {
       userId: Number(owner.user_id), apiKeyId: Number(owner.id), amountUsd: estimatedUsd, requestId,
@@ -266,7 +270,12 @@ function createProxyHandler({ quotaDb, upstreamDb }) {
     }
 
     const upstream = new URL(`${config.upstreamBaseUrl}${req.originalUrl}`);
-    const headers = { ...req.headers, host: upstream.host, "x-request-id": requestId };
+    const headers = {
+      ...req.headers,
+      host: upstream.host,
+      "x-request-id": requestId,
+      "x-client-request-id": requestId,
+    };
     delete headers.connection;
     const proxyReq = http.request(upstream, { method: req.method, headers }, (proxyRes) => {
       res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);

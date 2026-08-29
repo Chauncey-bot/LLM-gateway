@@ -7,7 +7,8 @@
 - 只读 Sub2API 的 `api_keys`（识别用户）和 `usage_logs`（结算实际消费）。
 - 只写支付库 `zhisales_pay` 内的 `traffic_pack_quota_states`、`traffic_pack_quota_holds`。
 - 支付服务是套餐基线、购买、过期和手动重置的唯一授权来源。
-- 网关会覆盖转发给上游的 `X-Request-ID`，再用该 ID 从只读 `usage_logs` 找到实际消费金额。
+- 网关会覆盖转发给上游的 `X-Request-ID`、`X-Client-Request-ID`，再用该 ID 从只读 `usage_logs` 找到实际消费金额。
+- 请求预占使用小额固定下限和可配置上限（`QUOTA_GATEWAY_DEFAULT_HOLD_USD`、`QUOTA_GATEWAY_MAX_HOLD_USD`）；请求体字节数只作保守估算，不能无限放大预占。
 
 ## 运行方式
 
@@ -19,7 +20,7 @@ npm test
 npm start
 ```
 
-将 `deploy/caddy-quota-route.caddy` 放在 Caddy 的通用 `/api/*`、`/v1/*` 反向代理规则之前。该网关必须以失败关闭（fail closed）方式发布：额度账本或只读身份查询不可用时，不得绕过到上游。
+将 `deploy/caddy-quota-route.caddy` 放在 Caddy 的 `/responses/compact` 和通用 `/api/*`、`/v1/*` 反向代理规则之前；否则紧凑 Responses 请求会绕过额度网关。可使用 `deploy/install-caddy-route.sh` 在生产的 `ai.zhisales.com`、`www.zhisales.com` 两个站点安装，脚本会先备份并校验 Caddy 配置后再 reload。该网关必须以失败关闭（fail closed）方式发布：额度账本或只读身份查询不可用时，不得绕过到上游。
 
 ## 上游配置迁移
 

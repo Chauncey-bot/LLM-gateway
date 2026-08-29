@@ -72,6 +72,30 @@ test("two API keys cannot exceed one managed account quota", async () => {
   assert.equal(pool.state.reserved_usage_usd, 5);
 });
 
+test("PostgreSQL DATE values represented as Date objects remain ISO dates", async () => {
+  const now = new Date("2026-08-07T10:00:00.000+08:00");
+  const pool = new MemoryQuotaPool({
+    user_id: 22,
+    daily_window_start: new Date("2026-08-07T00:00:00.000Z"),
+    base_daily_quota_usd: 400,
+    effective_daily_quota_usd: 500,
+    daily_usage_usd: 0,
+    reserved_usage_usd: 0,
+    traffic_pack_expires_at: null,
+  });
+
+  const result = await reserveQuota(pool, {
+    userId: 22,
+    apiKeyId: 1,
+    amountUsd: 5,
+    requestId: "00000000-0000-4000-8000-000000000004",
+    now,
+  });
+
+  assert.equal(result.allowed, true);
+  assert.equal(pool.holds.get(result.requestId).daily_window_start, "2026-08-07");
+});
+
 test("settlement releases the hold and records only actual upstream usage", async () => {
   const now = new Date("2026-08-07T10:00:00.000+08:00");
   const pool = new MemoryQuotaPool({

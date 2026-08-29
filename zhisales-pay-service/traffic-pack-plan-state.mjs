@@ -2,12 +2,16 @@ const CHINA_TIME_ZONE = "Asia/Shanghai";
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 function chinaDay(value) {
-  return new Intl.DateTimeFormat("en-CA", {
+  const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: CHINA_TIME_ZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(new Date(value));
+  }).formatToParts(new Date(value)).reduce((result, part) => {
+    if (part.type === "year" || part.type === "month" || part.type === "day") result[part.type] = part.value;
+    return result;
+  }, {});
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 function subscriptionStart(subscription) {

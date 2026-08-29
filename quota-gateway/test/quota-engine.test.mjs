@@ -1,9 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { decideReservation, estimateReservationUsd, normalizeQuotaState, settleReservation } from "../quota-engine.mjs";
+import { chinaDay, decideReservation, estimateReservationUsd, normalizeQuotaState, settleReservation } from "../quota-engine.mjs";
 
 const today = new Date("2026-08-07T10:00:00.000+08:00");
+
+test("China day is always ISO formatted for PostgreSQL DATE values", () => {
+  assert.match(chinaDay(today), /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(chinaDay(today), "2026-08-07");
+});
 
 test("expired traffic pack resets to plan baseline at China midnight", () => {
   const state = normalizeQuotaState({
@@ -73,4 +78,23 @@ test("reservation estimate honors explicit maximum output tokens", () => {
     maxUsdPer1kTokens: 0.2,
   });
   assert.equal(estimated, 4.2);
+});
+
+test("reservation estimate caps a large JSON request body", () => {
+  const estimated = estimateReservationUsd({
+    contentLength: 10_411_145,
+    defaultHoldUsd: 5,
+    maxUsdPer1kTokens: 0.1,
+    maxHoldUsd: 10,
+  });
+  assert.equal(estimated, 10);
+});
+
+test("reservation estimate never falls below the configured default hold", () => {
+  const estimated = estimateReservationUsd({
+    contentLength: 0,
+    defaultHoldUsd: 5,
+    maxHoldUsd: 10,
+  });
+  assert.equal(estimated, 5);
 });

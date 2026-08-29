@@ -1,5 +1,6 @@
-# Put these matchers before the generic Sub2API API matcher.  The quota gateway
-# proxies the request to the unmodified upstream at 127.0.0.1:18080.
+# Put this block before both the /responses/compact handler and the generic
+# Sub2API API matcher. The quota gateway proxies the request to the unmodified
+# upstream and enforces the account's effective daily quota.
 @quota_api path /v1/* /responses* /models* /api/openai/* /api/anthropic/*
 handle @quota_api {
   reverse_proxy 127.0.0.1:18193
