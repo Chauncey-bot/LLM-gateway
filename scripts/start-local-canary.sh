@@ -2,16 +2,30 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PAY_DIR="$ROOT_DIR/zhisales-pay-service"
 REWARDS_DIR="$ROOT_DIR/referral-rewards-service"
 BACKUP_DIR="/tmp/zhisales-localtest-backup"
+CANARY_LOCAL_ENV="${SCRIPT_DIR}/local-canary.env"
+
+if [[ -f "$CANARY_LOCAL_ENV" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$CANARY_LOCAL_ENV"
+  set +a
+fi
 
 REMOTE_HOST="${REMOTE_HOST:-18.143.67.94}"
 REMOTE_USER="${REMOTE_USER:-ubuntu}"
 REMOTE_KEY="${REMOTE_KEY:-/Users/chauncey/Downloads/sg.pem}"
-REMOTE_DB_HOST="${REMOTE_DB_HOST:-172.21.0.2}"
+REMOTE_DB_HOST="${REMOTE_DB_HOST:-$REMOTE_HOST}"
+REMOTE_DB_TUNNEL_HOST="${REMOTE_DB_TUNNEL_HOST:-$REMOTE_DB_HOST}"
+REMOTE_SSH_PORT="${REMOTE_SSH_PORT:-22}"
+REMOTE_DB_CONTAINER="${REMOTE_DB_CONTAINER:-sub2api-postgres}"
 REMOTE_DB_PORT="${REMOTE_DB_PORT:-5432}"
 DB_TUNNEL_LOCAL_PORT="${DB_TUNNEL_LOCAL_PORT:-25432}"
+REMOTE_DB_USE_PUBLIC_IP="${REMOTE_DB_USE_PUBLIC_IP:-0}"
+BASTION_ONLY="${BASTION_ONLY:-1}"
 
 PAY_PORT="${PAY_PORT:-18195}"
 REWARDS_PORT="${REWARDS_PORT:-18196}"
@@ -32,6 +46,10 @@ if [[ ! -x "$(command -v node || true)" ]]; then
   exit 1
 fi
 
+if [[ "$BASTION_ONLY" == "1" ]]; then
+  REMOTE_DB_USE_PUBLIC_IP="0"
+fi
+
 mkdir -p "$BACKUP_DIR"
 ts="$(date +%Y%m%d_%H%M%S)"
 if [[ -f "$PAY_DIR/.env.canary" ]]; then
@@ -46,8 +64,8 @@ if [[ "$SYNC_REMOTE_ENV" == "1" ]]; then
     echo "[err] REMOTE_KEY not found: $REMOTE_KEY"
     exit 1
   fi
-  scp -i "$REMOTE_KEY" -o StrictHostKeyChecking=no "$REMOTE_USER@$REMOTE_HOST:/opt/sub2api-canary/zhisales-pay-service/.env.canary" "$PAY_DIR/.env.canary"
-  scp -i "$REMOTE_KEY" -o StrictHostKeyChecking=no "$REMOTE_USER@$REMOTE_HOST:/opt/sub2api-canary/referral-rewards-service/.env.canary" "$REWARDS_DIR/.env.canary"
+  scp -P "$REMOTE_SSH_PORT" -i "$REMOTE_KEY" -o StrictHostKeyChecking=no "$REMOTE_USER@$REMOTE_HOST:/opt/sub2api-canary/zhisales-pay-service/.env.canary" "$PAY_DIR/.env.canary"
+  scp -P "$REMOTE_SSH_PORT" -i "$REMOTE_KEY" -o StrictHostKeyChecking=no "$REMOTE_USER@$REMOTE_HOST:/opt/sub2api-canary/referral-rewards-service/.env.canary" "$REWARDS_DIR/.env.canary"
 fi
 
 load_env_file() {
@@ -81,10 +99,59 @@ stop_any() {
   fi
 }
 
+stop_stale_launchd_tunnel() {
+  local user_boot_domain="gui/$(id -u)/com.zhisales.local-db-tunnel"
+  if launchctl print "$user_boot_domain" >/dev/null 2>&1; then
+    echo "[local-canary] 发现旧 LaunchAgent com.zhisales.local-db-tunnel，先停止以避免端口冲突"
+    launchctl bootout "$user_boot_domain" 2>/dev/null || true
+  fi
+}
+
 start_tunnel() {
-  ssh -f -i "$REMOTE_KEY" -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=no -N \
-    -L 127.0.0.1:${DB_TUNNEL_LOCAL_PORT}:${REMOTE_DB_HOST}:${REMOTE_DB_PORT} "$REMOTE_USER@$REMOTE_HOST"
-  pgrep -f "ssh.*127.0.0.1:${DB_TUNNEL_LOCAL_PORT}:${REMOTE_DB_HOST}:${REMOTE_DB_PORT}" | head -n 1 > "$TUNNEL_PID_FILE"
+  local resolved_host
+  local remote_host_output=""
+  local pids
+
+  if [[ ! -f "$REMOTE_KEY" ]]; then
+    echo "[err] REMOTE_KEY not found: $REMOTE_KEY"
+    exit 1
+  fi
+
+  if [[ "${REMOTE_DB_USE_PUBLIC_IP}" == "1" ]]; then
+    echo "[local-canary] 使用外网DB隧道地址: ${REMOTE_DB_TUNNEL_HOST}:${REMOTE_DB_PORT}"
+    resolved_host="$REMOTE_DB_TUNNEL_HOST"
+  else
+    remote_host_output="$(ssh -p "$REMOTE_SSH_PORT" -i "$REMOTE_KEY" -o ConnectTimeout=8 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
+      "${REMOTE_USER}@${REMOTE_HOST}" "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${REMOTE_DB_CONTAINER} 2>/dev/null | tr -d '\r'")"
+    if [[ -n "$remote_host_output" ]]; then
+      resolved_host="$remote_host_output"
+    else
+      if [[ -z "$REMOTE_DB_HOST" ]]; then
+        echo "[local-canary] ERROR: 无法解析容器 IP，且未配置 REMOTE_DB_HOST"
+        exit 1
+      fi
+    resolved_host="$REMOTE_DB_HOST"
+      echo "[local-canary] 容器解析失败，回退到 REMOTE_DB_HOST: ${resolved_host}:${REMOTE_DB_PORT}"
+    fi
+  fi
+
+  if [[ -z "$resolved_host" ]]; then
+    echo "[local-canary] ERROR: 未能解析 DB 目标地址"
+    exit 1
+  fi
+
+  echo "[local-canary] DB 隧道目标: ${resolved_host}:${REMOTE_DB_PORT}"
+  stop_stale_launchd_tunnel
+  pids="$(lsof -tiTCP:${DB_TUNNEL_LOCAL_PORT} -sTCP:LISTEN -n -P 2>/dev/null || true)"
+  if [[ -n "$pids" ]]; then
+    echo "[local-canary] 清理旧隧道监听: $pids"
+    echo "$pids" | xargs kill -9 2>/dev/null || true
+    sleep 1
+  fi
+  ssh -p "$REMOTE_SSH_PORT" -f -i "$REMOTE_KEY" -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o ConnectTimeout=10 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -N \
+    -L 127.0.0.1:${DB_TUNNEL_LOCAL_PORT}:${resolved_host}:${REMOTE_DB_PORT} "${REMOTE_USER}@${REMOTE_HOST}"
+  sleep 1
+  pgrep -f "ssh.*127.0.0.1:${DB_TUNNEL_LOCAL_PORT}:${resolved_host}:${REMOTE_DB_PORT}" | head -n 1 > "$TUNNEL_PID_FILE"
 }
 
 wait_health() {

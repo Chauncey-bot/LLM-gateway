@@ -7,6 +7,7 @@ RUN npm ci --omit=dev
 
 COPY server.mjs ./
 COPY subscription-list.mjs ./
+COPY subscription-duration.mjs ./
 COPY subscription-fulfillment.mjs ./
 COPY subscription-fulfillment-retry.mjs ./
 COPY traffic-pack-state.mjs ./

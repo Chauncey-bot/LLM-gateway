@@ -23,6 +23,7 @@ export interface PaymentCatalogSubscription {
   description: string
   amountCents: number
   validityDays: number | null
+  quotaDurationType?: "daily" | "monthly"
 }
 
 export interface PaymentCatalogBalancePack {

@@ -19,6 +19,20 @@ function subscriptionExpiry(subscription) {
 }
 
 export function isOneDayTemporarySubscription(subscription) {
+  if (!subscription) return false;
+  const explicitType = (
+    subscription.quota_duration_type
+    || subscription.quotaDurationType
+    || subscription.group?.quota_duration_type
+    || subscription.group?.quotaDurationType
+  );
+  if (explicitType === "daily") {
+    return true;
+  }
+  if (explicitType === "monthly") {
+    return false;
+  }
+
   const startValue = subscriptionStart(subscription);
   const expiryValue = subscriptionExpiry(subscription);
   if (!startValue || !expiryValue) return false;

@@ -9,6 +9,7 @@ import pg from "pg";
 import { buildOrderFulfillmentRequest } from "./subscription-fulfillment.mjs";
 import { fulfillSubscriptionWithRetry } from "./subscription-fulfillment-retry.mjs";
 import { normalizeSubscriptionListResponse } from "./subscription-list.mjs";
+import { resolveSubscriptionValidityDays } from "./subscription-duration.mjs";
 import {
   calculateEffectiveDailyQuota,
   calculateTrafficPackPurchaseQuota,
@@ -102,19 +103,53 @@ function jsonError(res, status, message, extra = {}) {
   res.status(status).json({ error: message, ...extra });
 }
 
+function normalizeSubscriptionQuotaType(sku) {
+  if (!sku || sku.type !== "subscription") {
+    return "";
+  }
+  const type = resolveSubscriptionValidityDays(sku) === 1 ? "daily" : "monthly";
+  return type;
+}
+
 function orderTitleFromSku(sku) {
-  return sku.title || sku.code;
+  if (sku.type === "subscription") {
+    const validityDays = resolveSubscriptionValidityDays(sku, { fallbackDays: 30 });
+    return sanitizeTradingField(`${sku.title} / group ${sku.group_id} / ${validityDays} days`, {
+      maxLength: 80,
+    });
+  }
+  if (sku.type === "traffic") {
+    const bonusAmount = Number(sku.daily_quota_bonus_usd || sku.balance_amount || 0);
+    return sanitizeTradingField(`${sku.title} / traffic +$${bonusAmount}`, { maxLength: 80 });
+  }
+  return sanitizeTradingField(`${sku.title} / balance +${sku.balance_amount}`, { maxLength: 80 });
 }
 
 function orderBodyFromSku(sku) {
   if (sku.type === "subscription") {
-    return `${sku.title} / group ${sku.group_id} / ${sku.validity_days} days`;
+    const validityDays = resolveSubscriptionValidityDays(sku, { fallbackDays: 30 });
+    return sanitizeTradingField(`${sku.title} / group ${sku.group_id} / ${validityDays} days`, {
+      maxLength: 120,
+    });
   }
   if (sku.type === "traffic") {
     const bonusAmount = Number(sku.daily_quota_bonus_usd || sku.balance_amount || 0);
-    return `${sku.title} / traffic +$${bonusAmount}`;
+    return sanitizeTradingField(`${sku.title} / traffic +$${bonusAmount}`, { maxLength: 120 });
   }
-  return `${sku.title} / balance +${sku.balance_amount}`;
+  return sanitizeTradingField(`${sku.title} / balance +${sku.balance_amount}`, { maxLength: 120 });
+}
+
+function sanitizeTradingField(value, { maxLength = 80 } = {}) {
+  const normalized = String(value ?? "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/[()]/g, "")
+    .replace(/[^\x20-\x7E\u4e00-\u9fff]/g, "")
+    .trim();
+  if (!Number.isFinite(maxLength) || maxLength <= 0) {
+    return normalized;
+  }
+  return normalized.slice(0, maxLength);
 }
 
 function signFields(payload, secret) {
@@ -291,7 +326,12 @@ async function readCatalog() {
   const balancePacks = Array.isArray(parsed.balance_packs) ? parsed.balance_packs : [];
   const trafficPacks = Array.isArray(parsed.traffic_packs) ? parsed.traffic_packs : [];
   return {
-    subscriptions: subscriptions.map((item) => ({ ...item, type: "subscription" })),
+    subscriptions: subscriptions.map((item) => ({
+      ...item,
+      type: "subscription",
+      resolvedQuotaType: normalizeSubscriptionQuotaType(item),
+      resolvedValidityDays: resolveSubscriptionValidityDays(item, { fallbackDays: 30 }),
+    })),
     balancePacks: balancePacks.map((item) => ({ ...item, type: "balance" })),
     trafficPacks: trafficPacks.map((item) => ({ ...item, type: "traffic" })),
   };
@@ -1633,7 +1673,8 @@ function html(mode) {
           return '<div><div class="section-title">' + title + '</div><div class="grid">' + items.map(function (item) {
             let extra = '';
             if (type === 'subscription') {
-              extra = '<div class="meta-list"><div>Group ID: ' + item.groupId + '</div><div>有效期: ' + item.validityDays + ' 天</div></div>';
+              const quotaType = item.quotaDurationType === 'daily' ? '按日定义额度' : '按月定义额度';
+              extra = '<div class="meta-list"><div>Group ID: ' + item.groupId + '</div><div>额度类型: ' + quotaType + '</div><div>有效期: ' + item.validityDays + ' 天</div></div>';
             } else if (type === 'balance') {
               extra = '<div class="meta-list"><div>到账余额: ' + item.balanceAmount + '</div></div>';
             } else if (type === 'traffic') {
@@ -1868,7 +1909,8 @@ app.get("/pay-api/catalog", async (_req, res) => {
         title: item.title,
         description: item.description,
         amountCents: Number(item.amount_cents),
-        validityDays: Number(item.validity_days || 30),
+        validityDays: Number(item.resolvedValidityDays || resolveSubscriptionValidityDays(item, { fallbackDays: 30 })),
+        quotaDurationType: item.resolvedQuotaType || "monthly",
       }))
       .sort((a, b) => a.amountCents - b.amountCents);
     res.json({
@@ -1954,7 +1996,9 @@ app.post("/pay-api/orders", async (req, res) => {
       skuType: isTrafficPack ? "traffic" : sku.type,
       skuCode: sku.code,
       groupId: sku.type === "subscription" ? Number(sku.group_id) : null,
-      validityDays: sku.type === "subscription" ? Number(sku.validity_days || 30) : null,
+      validityDays: sku.type === "subscription"
+        ? Number(sku.resolvedValidityDays || resolveSubscriptionValidityDays(sku, { fallbackDays: 30 }))
+        : null,
       balanceAmount:
         sku.type === "balance" || sku.type === "traffic"
           ? parseOptionalNumber(sku.balance_amount ?? sku.daily_quota_bonus_usd)

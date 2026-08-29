@@ -767,6 +767,8 @@ interface GroupOption {
   platform: GroupPlatform
   subscriptionType: SubscriptionType
   rate: number
+  status: 'active' | 'inactive'
+  disabledReason?: string | null
 }
 
 // Guide modal state
@@ -969,19 +971,21 @@ const platformFilterOptions = computed(() => [
   { value: 'sora', label: 'Sora' }
 ])
 
-// Group options for assign (only subscription type groups)
-const subscriptionGroupOptions = computed(() =>
-  groups.value
-    .filter((g) => g.subscription_type === 'subscription' && g.status === 'active')
-    .map((g) => ({
-      value: g.id,
-      label: g.name,
-      description: g.description,
-      platform: g.platform,
-      subscriptionType: g.subscription_type,
-      rate: g.rate_multiplier
-    }))
-)
+const formatGroupLabel = (group: Group) =>
+  group.status === 'active' ? group.name : `${group.name} (${t('common.disabled')})`
+
+const subscriptionGroupOptions = computed(() => {
+  return groups.value.map((g) => ({
+    value: g.id,
+    label: `${g.id}: ${formatGroupLabel(g)}${g.subscription_type === 'standard' ? ' (非订阅组)' : ''}`,
+    description: g.description,
+    platform: g.platform,
+    subscriptionType: g.subscription_type,
+    rate: g.rate_multiplier,
+    status: g.status,
+    disabledReason: g.subscription_type === 'standard' ? '非订阅组不可分配到订阅用户' : null
+  }))
+})
 
 const applyFilters = () => {
   pagination.page = 1
@@ -1032,10 +1036,49 @@ const loadSubscriptions = async () => {
 }
 
 const loadGroups = async () => {
+  const map = new Map<number, Group>()
+
   try {
-    groups.value = await adminAPI.groups.getAll()
+    const allGroups = await adminAPI.groups.getAll()
+    for (const item of allGroups) {
+      map.set(item.id, item)
+    }
   } catch (error) {
-    console.error('Error loading groups:', error)
+    console.error('Error loading all groups:', error)
+  }
+
+  const tryLoadStatusGroups = async (status: 'active' | 'inactive') => {
+    try {
+      const pageSize = 200
+      let page = 1
+
+      while (true) {
+        const response = await adminAPI.groups.list(page, pageSize, { status })
+        if (!response?.items?.length) {
+          break
+        }
+
+        for (const item of response.items) {
+          map.set(item.id, item)
+        }
+
+        if (response.page >= response.pages || response.items.length < pageSize) {
+          break
+        }
+        page += 1
+      }
+    } catch (error) {
+      console.error(`Error loading ${status} groups:`, error)
+    }
+  }
+
+  await tryLoadStatusGroups('active')
+  await tryLoadStatusGroups('inactive')
+
+  if (map.size > 0) {
+    groups.value = Array.from(map.values())
+  } else {
+    console.error('No groups loaded from any source')
   }
 }
 

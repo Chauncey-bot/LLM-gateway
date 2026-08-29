@@ -7,7 +7,8 @@
       "description": "200 RMB per month, 80 USD daily limit.",
       "amount_cents": 20000,
       "group_id": 10,
-      "validity_days": 30
+      "validity_days": 30,
+      "quota_duration_type": "monthly"
     },
     {
       "code": "coding-plan-daily-100",
@@ -17,6 +18,7 @@
       "amount_cents": 1000,
       "group_id": 23,
       "validity_days": 1,
+      "quota_duration_type": "daily",
       "topup_balance_amount": 100
     },
     {
@@ -27,6 +29,7 @@
       "amount_cents": 1000,
       "group_id": 24,
       "validity_days": 1,
+      "quota_duration_type": "daily",
       "topup_balance_amount": 100
     },
     {
@@ -36,7 +39,8 @@
       "description": "500 RMB per month, 200 USD daily limit.",
       "amount_cents": 50000,
       "group_id": 5,
-      "validity_days": 30
+      "validity_days": 30,
+      "quota_duration_type": "monthly"
     },
     {
       "code": "coding-plan-daily-1-test",
@@ -45,7 +49,8 @@
       "description": "0.99 RMB test plan, 1 USD daily limit.",
       "amount_cents": 99,
       "group_id": 14,
-      "validity_days": 30
+      "validity_days": 30,
+      "quota_duration_type": "monthly"
     },
     {
       "code": "coding-plan-daily-10",
@@ -54,7 +59,8 @@
       "description": "20 RMB test plan, 10 USD daily limit.",
       "amount_cents": 2000,
       "group_id": 15,
-      "validity_days": 30
+      "validity_days": 30,
+      "quota_duration_type": "monthly"
     },
     {
       "code": "coding-plan-daily-800",
@@ -63,7 +69,8 @@
       "description": "Fill amount_cents before enabling this SKU.",
       "amount_cents": 0,
       "group_id": 12,
-      "validity_days": 30
+      "validity_days": 30,
+      "quota_duration_type": "monthly"
     },
     {
       "code": "coding-plan-daily-400",
@@ -72,7 +79,8 @@
       "description": "1000 RMB per month, 400 USD daily limit.",
       "amount_cents": 100000,
       "group_id": 16,
-      "validity_days": 30
+      "validity_days": 30,
+      "quota_duration_type": "monthly"
     },
     {
       "code": "coding-plan-daily-1600",
@@ -81,7 +89,8 @@
       "description": "4000 RMB per month, 1600 USD daily limit.",
       "amount_cents": 400000,
       "group_id": 18,
-      "validity_days": 30
+      "validity_days": 30,
+      "quota_duration_type": "monthly"
     },
     {
       "code": "coding-plan-daily-300",
@@ -90,7 +99,8 @@
       "description": "750 RMB per month, 300 USD daily limit.",
       "amount_cents": 75000,
       "group_id": 21,
-      "validity_days": 30
+      "validity_days": 30,
+      "quota_duration_type": "monthly"
     },
     {
       "code": "coding-plan-daily-2800",
@@ -99,7 +109,32 @@
       "description": "7000 RMB per month, 2800 USD daily limit.",
       "amount_cents": 700000,
       "group_id": 22,
-      "validity_days": 30
+      "validity_days": 30,
+      "quota_duration_type": "monthly"
+    },
+    {
+      "code": "coding-plan-monthly-84000",
+      "enabled": false,
+      "title": "Coding Plan 84000 Monthly",
+      "description": "7000 RMB per month, 84000 USD monthly limit.",
+      "amount_cents": 700000,
+      "group_id": 25,
+      "validity_days": 30,
+      "quota_duration_type": "monthly",
+      "daily_limit_usd": 0,
+      "monthly_limit_usd": 84000
+    },
+    {
+      "code": "coding-plan-monthly-12000",
+      "enabled": false,
+      "title": "Coding Plan 12000 Monthly",
+      "description": "1200 RMB per month, 12000 USD monthly limit.",
+      "amount_cents": 120000,
+      "group_id": 26,
+      "validity_days": 30,
+      "quota_duration_type": "monthly",
+      "daily_limit_usd": 0,
+      "monthly_limit_usd": 12000
     },
     {
       "code": "claude-daily-80",
@@ -108,7 +143,8 @@
       "description": "Fill amount_cents before enabling this SKU.",
       "amount_cents": 0,
       "group_id": 11,
-      "validity_days": 30
+      "validity_days": 30,
+      "quota_duration_type": "monthly"
     },
     {
       "code": "claude-coding-200",
@@ -117,7 +153,8 @@
       "description": "Fill amount_cents before enabling this SKU.",
       "amount_cents": 0,
       "group_id": 9,
-      "validity_days": 30
+      "validity_days": 30,
+      "quota_duration_type": "monthly"
     }
   ],
   "traffic_packs": [

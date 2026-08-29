@@ -2,7 +2,7 @@
 
 # Reusable subscription-plan creation skill (production-oriented)
 # Usage:
-#   price_cny/daily_usd are required inputs, everything else has safe defaults.
+#   price_cny and exactly one of daily_usd/monthly_usd are required inputs.
 #
 # Example:
 #   ADMIN_EMAIL=admin@zhisales.com ADMIN_PASSWORD='***' \\
@@ -24,6 +24,7 @@ PLATFORM="${PLATFORM:-openai}"
 RATE_MULTIPLIER="${RATE_MULTIPLIER:-2.1}"
 PRICE_CNY=""
 DAILY_USD=""
+MONTHLY_USD=""
 COPY_FROM_GROUP_ID="${COPY_FROM_GROUP_ID:-18}"
 ASSIGN_USER_ID="${ASSIGN_USER_ID:-}"
 VALIDITY_DAYS="${VALIDITY_DAYS:-30}"
@@ -33,8 +34,8 @@ usage() {
   cat <<'EOF'
 Usage:
   bash docs/plans/add-subscription-plan.sh \
-    --price-cny <price in RMB> \
-    --daily-usd <daily limit in USD> \
+  --price-cny <price in RMB> \
+  (--daily-usd <daily limit in USD> | --monthly-usd <monthly limit in USD>) \
     --name <optional group name> \
     --assign-user-id <optional user id> \
     --validity-days <optional days, default 30> \
@@ -43,10 +44,10 @@ Usage:
     --rate-multiplier <optional, default 2.1>
 
 Required:
-  ADMIN_EMAIL, ADMIN_PASSWORD env vars must be set, and --price-cny/--daily-usd
+  ADMIN_EMAIL, ADMIN_PASSWORD env vars must be set, and --price-cny plus exactly one quota limit
 
 Optional:
-  DESCRIPTION (default: "<price> RMB per month, <daily> USD daily limit.")
+  DESCRIPTION (default: generated from the selected daily/monthly quota limit)
   API_BASE (default: https://www.zhisales.com)
 EOF
   exit 1
@@ -57,6 +58,7 @@ while [[ $# -gt 0 ]]; do
     --name) NAME="${2:?}"; shift 2 ;;
     --price-cny) PRICE_CNY="${2:?}"; shift 2 ;;
     --daily-usd) DAILY_USD="${2:?}"; shift 2 ;;
+    --monthly-usd) MONTHLY_USD="${2:?}"; shift 2 ;;
     --platform) PLATFORM="${2:?}"; shift 2 ;;
     --rate-multiplier) RATE_MULTIPLIER="${2:?}"; shift 2 ;;
     --copy-from) COPY_FROM_GROUP_ID="${2:?}"; shift 2 ;;
@@ -67,17 +69,33 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$EMAIL" || -z "$PASSWORD" || -z "$PRICE_CNY" || -z "$DAILY_USD" ]]; then
+if [[ -z "$EMAIL" || -z "$PASSWORD" || -z "$PRICE_CNY" ]]; then
   usage
 fi
 
+if [[ -n "$DAILY_USD" && -n "$MONTHLY_USD" ]] || [[ -z "$DAILY_USD" && -z "$MONTHLY_USD" ]]; then
+  echo "provide exactly one of --daily-usd or --monthly-usd" >&2
+  exit 1
+fi
+
 if [[ -z "$NAME" ]]; then
-  NAME="coding-plan-daily-${DAILY_USD}"
+  if [[ -n "$MONTHLY_USD" ]]; then
+    NAME="coding-plan-monthly-${MONTHLY_USD}"
+  else
+    NAME="coding-plan-daily-${DAILY_USD}"
+  fi
 fi
 
 if [[ -z "$DESCRIPTION" ]]; then
-  DESCRIPTION="${PRICE_CNY} RMB per month, ${DAILY_USD} USD daily limit."
+  if [[ -n "$MONTHLY_USD" ]]; then
+    DESCRIPTION="${PRICE_CNY} RMB per month, ${MONTHLY_USD} USD monthly limit."
+  else
+    DESCRIPTION="${PRICE_CNY} RMB per month, ${DAILY_USD} USD daily limit."
+  fi
 fi
+
+DAILY_LIMIT_PAYLOAD="${DAILY_USD:-0}"
+MONTHLY_LIMIT_PAYLOAD="${MONTHLY_USD:-0}"
 
 login_payload=$(cat <<EOF
 {"email":"$EMAIL","password":"$PASSWORD"}
@@ -102,9 +120,9 @@ create_payload=$(cat <<EOF
   "rate_multiplier":$RATE_MULTIPLIER,
   "is_exclusive":true,
   "subscription_type":"subscription",
-  "daily_limit_usd":$DAILY_USD,
+  "daily_limit_usd":$DAILY_LIMIT_PAYLOAD,
   "weekly_limit_usd":0,
-  "monthly_limit_usd":0,
+  "monthly_limit_usd":$MONTHLY_LIMIT_PAYLOAD,
   "copy_accounts_from_group_ids":[$COPY_FROM_GROUP_ID],
   "default_mapped_model":"gpt-5.4",
   "allow_messages_dispatch":false,

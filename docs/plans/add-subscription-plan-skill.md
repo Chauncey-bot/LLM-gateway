@@ -8,14 +8,15 @@
 - 重点避免新组无 `account_groups` 映射造成 503
 
 ## 输入参数
-- `name`: 分组名称，例如 `coding-plan-daily-1600`（可选，不填自动按 daily_usd 生成）
+- `name`: 分组名称，例如 `coding-plan-daily-1600` 或 `coding-plan-monthly-84000`（可选，按额度类型自动生成）
 - `platform`: 推荐 `openai`（默认 `openai`）
 - `subscription_type`: `subscription`
-- `daily_limit_usd`: 每日额度（美元）（**必填**）
+- `daily_limit_usd`: 每日额度（美元），与月度额度二选一（**必填其一**）
+- `monthly_limit_usd`: 月度额度（美元），与每日额度二选一（**必填其一**）
 - `price_cny`: 月付价格（人民币）（**必填**）
 - `rate_multiplier`: 计费倍率（默认 `2.1`，按既有套餐可按需调整）
 - `copyFromGroupId`: 复制账号映射来源组 ID（默认 `18`）
-- `description`: 套餐说明（默认 `"{price_cny} RMB per month, {daily_limit_usd} USD daily limit."`）
+- `description`: 套餐说明（默认根据每日/月度额度自动生成）
 - `assign_user_id`: 可选，是否给目标用户分配订阅（默认不分配）
 - `validity_days`: 可选，分配时长度，默认 30
 
@@ -27,7 +28,7 @@
   - `订阅类型`: `subscription`
   - `独占`: `true`（建议）
   - `平台默认映射模型`: `gpt-5.4`（若适用）
-  - `日限额/周限额/月限额`: 根据需要填写（日常建议只填日限额）
+  - `日限额/周限额/月限额`: 按套餐类型填写；月度套餐填 `日限额=0`、`月限额=84000`
   - `复制账号`: 选择 `copyFromGroupId`（例如 `17`）
 - 点击提交，拿到 `group_id`
 
@@ -61,9 +62,9 @@ Content-Type: application/json
   "rate_multiplier": 2.1,
   "is_exclusive": true,
   "subscription_type": "subscription",
-  "daily_limit_usd": 2000,
+  "daily_limit_usd": 0,
   "weekly_limit_usd": null,
-  "monthly_limit_usd": null,
+  "monthly_limit_usd": 84000,
   "copy_accounts_from_group_ids": [18],
   "default_mapped_model": "gpt-5.4",
   "allow_messages_dispatch": false,

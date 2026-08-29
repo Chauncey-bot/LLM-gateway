@@ -183,7 +183,7 @@
               />
             </button>
             <div
-              v-if="modelDistributionExpanded && usageChartsLoading"
+              v-if="modelDistributionExpanded && modelDistributionLoading"
               class="mt-4 flex h-52 items-center justify-center"
             >
               <LoadingSpinner size="md" />
@@ -650,16 +650,6 @@
             <span class="text-gray-400">{{ t('usage.serviceTier') }}</span>
             <span class="font-semibold text-cyan-300">{{ getUsageServiceTierLabel(tooltipData?.service_tier, t) }}</span>
           </div>
-          <div class="flex items-center justify-between gap-6">
-            <span class="text-gray-400">{{ t('usage.rate') }}</span>
-            <span class="font-semibold text-blue-400"
-              >{{ (tooltipData?.rate_multiplier || 1).toFixed(2) }}x</span
-            >
-          </div>
-          <div class="flex items-center justify-between gap-6">
-            <span class="text-gray-400">{{ t('usage.original') }}</span>
-            <span class="font-medium text-white">${{ getLogStandardCost(tooltipData).toFixed(6) }}</span>
-          </div>
           <div class="flex items-center justify-between gap-6 border-t border-gray-700 pt-1.5">
             <span class="text-gray-400">{{ t('usage.billed') }}</span>
             <span class="font-semibold text-green-400"
@@ -740,13 +730,14 @@ const loading = ref(false)
 const exporting = ref(false)
 const keySpendLoading = ref(false)
 const keySpendDistribution = ref<ApiKeySpendItem[]>([])
-const usageChartsLoading = ref(false)
-const usageChartLogs = ref<UsageLog[]>([])
+const modelDistributionLoading = ref(false)
+const modelDistributionStats = ref<ModelStat[]>([])
 const modelDistributionExpanded = ref(false)
 const keySpendExpanded = ref(false)
 const modelDistributionChartRenderKey = ref(0)
 const keySpendChartRenderKey = ref(0)
 let keySpendReqSeq = 0
+let modelDistributionReqSeq = 0
 
 interface ApiKeySpendItem {
   key: string
@@ -918,44 +909,6 @@ const getUsageStandardCost = (stats: UsageStatsResponse | null): number => {
   return normalizeNumber(record?.total_cost ?? record?.total_actual_cost)
 }
 
-const getTotalTokens = (log: UsageLog): number =>
-  Number(log.input_tokens || 0) +
-  Number(log.output_tokens || 0) +
-  Number(log.cache_creation_tokens || 0) +
-  Number(log.cache_read_tokens || 0)
-
-const modelDistributionStats = computed<ModelStat[]>(() => {
-  const byModel = new Map<string, ModelStat>()
-  for (const log of usageChartLogs.value) {
-    const model = log.model || t('usage.unknown')
-    const existing = byModel.get(model)
-    if (existing) {
-      existing.requests += 1
-      existing.input_tokens += Number(log.input_tokens || 0)
-      existing.output_tokens += Number(log.output_tokens || 0)
-      existing.cache_creation_tokens += Number(log.cache_creation_tokens || 0)
-      existing.cache_read_tokens += Number(log.cache_read_tokens || 0)
-      existing.total_tokens += getTotalTokens(log)
-      existing.cost += getLogStandardCost(log)
-      existing.actual_cost += getLogActualCost(log)
-    } else {
-      byModel.set(model, {
-        model,
-        requests: 1,
-        input_tokens: Number(log.input_tokens || 0),
-        output_tokens: Number(log.output_tokens || 0),
-        cache_creation_tokens: Number(log.cache_creation_tokens || 0),
-        cache_read_tokens: Number(log.cache_read_tokens || 0),
-        total_tokens: getTotalTokens(log),
-        cost: getLogStandardCost(log),
-        actual_cost: getLogActualCost(log)
-      })
-    }
-  }
-
-  return Array.from(byModel.values()).sort((a, b) => b.total_tokens - a.total_tokens)
-})
-
 const modelDistributionChartData = computed(() => {
   if (!modelDistributionStats.value.length) return null
 
@@ -1043,6 +996,7 @@ const refreshChart = async (chartKey: typeof modelDistributionChartRenderKey) =>
 const toggleModelDistribution = () => {
   modelDistributionExpanded.value = !modelDistributionExpanded.value
   if (modelDistributionExpanded.value) {
+    loadModelDistribution()
     refreshChart(modelDistributionChartRenderKey)
   }
 }
@@ -1050,6 +1004,7 @@ const toggleModelDistribution = () => {
 const toggleKeySpendDistribution = () => {
   keySpendExpanded.value = !keySpendExpanded.value
   if (keySpendExpanded.value) {
+    loadKeySpendDistribution()
     refreshChart(keySpendChartRenderKey)
   }
 }
@@ -1170,56 +1125,126 @@ const loadUsageStats = async () => {
   }
 }
 
+const getActiveUsageStats = (apiKeyId?: number, model?: string) => {
+  const activeFilters = getActiveFilters()
+  return usageAPI.getStatsByDateRange(
+    activeFilters.start_date || startDate.value,
+    activeFilters.end_date || endDate.value,
+    apiKeyId,
+    model || activeFilters.model
+  )
+}
+
+const toModelStat = (model: string, stats: UsageStatsResponse): ModelStat => ({
+  model,
+  requests: normalizeNumber(stats.total_requests),
+  input_tokens: normalizeNumber(stats.total_input_tokens),
+  output_tokens: normalizeNumber(stats.total_output_tokens),
+  cache_creation_tokens: 0,
+  cache_read_tokens: normalizeNumber(stats.total_cache_tokens),
+  total_tokens: normalizeNumber(stats.total_tokens),
+  cost: getUsageStandardCost(stats),
+  actual_cost: getUsageActualCost(stats)
+})
+
+const loadModelDistribution = async () => {
+  const seq = ++modelDistributionReqSeq
+  modelDistributionLoading.value = true
+  try {
+    const activeFilters = getActiveFilters()
+    const response = await usageAPI.getDashboardModels({
+      start_date: activeFilters.start_date || startDate.value,
+      end_date: activeFilters.end_date || endDate.value
+    })
+    if (seq !== modelDistributionReqSeq) return
+
+    const models = (response.models || [])
+      .filter((item) => !activeFilters.model || item.model === activeFilters.model)
+
+    if (activeFilters.api_key_id === undefined) {
+      modelDistributionStats.value = models
+        .map((item) => ({
+          ...item,
+          requests: normalizeNumber(item.requests),
+          input_tokens: normalizeNumber(item.input_tokens),
+          output_tokens: normalizeNumber(item.output_tokens),
+          cache_creation_tokens: normalizeNumber(item.cache_creation_tokens),
+          cache_read_tokens: normalizeNumber(item.cache_read_tokens),
+          total_tokens: normalizeNumber(item.total_tokens),
+          cost: normalizeNumber(item.cost),
+          actual_cost: normalizeNumber(item.actual_cost)
+        }))
+        .sort((a, b) => b.total_tokens - a.total_tokens)
+    } else {
+      const items: ModelStat[] = []
+      for (const item of models) {
+        const stats = await getActiveUsageStats(activeFilters.api_key_id, item.model)
+        if (seq !== modelDistributionReqSeq) return
+        if (normalizeNumber(stats.total_requests) > 0) {
+          items.push(toModelStat(item.model, stats))
+        }
+      }
+      modelDistributionStats.value = items.sort((a, b) => b.total_tokens - a.total_tokens)
+    }
+    refreshChart(modelDistributionChartRenderKey)
+  } catch (error) {
+    console.error('Failed to load model distribution:', error)
+    if (seq === modelDistributionReqSeq) {
+      modelDistributionStats.value = []
+    }
+  } finally {
+    if (seq === modelDistributionReqSeq) {
+      modelDistributionLoading.value = false
+    }
+  }
+}
+
 const loadKeySpendDistribution = async () => {
   const seq = ++keySpendReqSeq
   keySpendLoading.value = true
-  usageChartsLoading.value = true
   try {
-    const allLogs: UsageLog[] = []
-    const pageSize = 100
-    let page = 1
-    let totalPages = 1
+    const activeFilters = getActiveFilters()
+    const totalStats = await getActiveUsageStats(activeFilters.api_key_id, activeFilters.model)
+    if (seq !== keySpendReqSeq) return
 
-    do {
-      const response = await usageAPI.query({
-        page,
-        page_size: pageSize,
-        ...getActiveFilters()
-      })
+    const keys = activeFilters.api_key_id === undefined
+      ? apiKeys.value
+      : apiKeys.value.filter((key) => Number(key.id) === Number(activeFilters.api_key_id))
+    const items: Omit<ApiKeySpendItem, 'percent'>[] = []
+
+    for (const apiKey of keys) {
+      const stats = activeFilters.api_key_id === undefined
+        ? await getActiveUsageStats(Number(apiKey.id), activeFilters.model)
+        : totalStats
       if (seq !== keySpendReqSeq) return
-      allLogs.push(...response.items)
-      totalPages = Number(response.pages || Math.ceil((response.total || 0) / pageSize) || 1)
-      if (response.items.length < pageSize) break
-      page += 1
-    } while (page <= totalPages)
-
-    usageChartLogs.value = allLogs
-    const apiKeyNameMap = new Map(apiKeys.value.map((key) => [Number(key.id), key.name]))
-    const byKey = new Map<string, Omit<ApiKeySpendItem, 'percent'>>()
-    for (const log of allLogs) {
-      const apiKeyId = log.api_key_id == null ? null : Number(log.api_key_id)
-      const key = apiKeyId == null ? 'unknown' : String(apiKeyId)
-      const existing = byKey.get(key)
-      const name =
-        log.api_key?.name ||
-        (apiKeyId == null ? t('usage.unknownApiKey') : apiKeyNameMap.get(apiKeyId)) ||
-        `#${apiKeyId}`
-      if (existing) {
-        existing.requests += 1
-        existing.actualCost += getLogActualCost(log)
-      } else {
-        byKey.set(key, {
-          key,
-          apiKeyId,
-          name,
-          requests: 1,
-          actualCost: getLogActualCost(log)
+      const requests = normalizeNumber(stats.total_requests)
+      if (requests > 0) {
+        items.push({
+          key: String(apiKey.id),
+          apiKeyId: Number(apiKey.id),
+          name: apiKey.name,
+          requests,
+          actualCost: getUsageActualCost(stats)
         })
       }
     }
 
-    const total = Array.from(byKey.values()).reduce((sum, item) => sum + item.actualCost, 0)
-    keySpendDistribution.value = Array.from(byKey.values())
+    const knownRequests = items.reduce((sum, item) => sum + item.requests, 0)
+    const knownActualCost = items.reduce((sum, item) => sum + item.actualCost, 0)
+    const unknownRequests = Math.max(0, normalizeNumber(totalStats.total_requests) - knownRequests)
+    const unknownActualCost = Math.max(0, getUsageActualCost(totalStats) - knownActualCost)
+    if (activeFilters.api_key_id === undefined && (unknownRequests > 0 || unknownActualCost > 0)) {
+      items.push({
+        key: 'unknown',
+        apiKeyId: null,
+        name: t('usage.unknownApiKey'),
+        requests: unknownRequests,
+        actualCost: unknownActualCost
+      })
+    }
+
+    const total = items.reduce((sum, item) => sum + item.actualCost, 0)
+    keySpendDistribution.value = items
       .map((item) => ({
         ...item,
         percent: total > 0 ? (item.actualCost / total) * 100 : 0
@@ -1229,24 +1254,37 @@ const loadKeySpendDistribution = async () => {
     console.error('Failed to load key spend distribution:', error)
     if (seq === keySpendReqSeq) {
       keySpendDistribution.value = []
-      usageChartLogs.value = []
     }
   } finally {
     if (seq === keySpendReqSeq) {
       keySpendLoading.value = false
-      usageChartsLoading.value = false
     }
   }
 }
 
-const applyFilters = () => {
-  pagination.page = 1
-  loadUsageLogs()
-  loadUsageStats()
-  loadKeySpendDistribution()
+const refreshUsageData = async (options: { resetPage?: boolean } = {}) => {
+  if (options.resetPage) {
+    pagination.page = 1
+  }
+
+  const tasks: Promise<unknown>[] = [loadUsageLogs(), loadUsageStats()]
+
+  if (modelDistributionExpanded.value) {
+    tasks.push(loadModelDistribution())
+  }
+
+  if (keySpendExpanded.value) {
+    tasks.push(loadKeySpendDistribution())
+  }
+
+  await Promise.all(tasks)
 }
 
-const resetFilters = () => {
+const applyFilters = async () => {
+  await refreshUsageData({ resetPage: true })
+}
+
+const resetFilters = async () => {
   filters.value = {
     api_key_id: undefined,
     start_date: undefined,
@@ -1258,10 +1296,7 @@ const resetFilters = () => {
   endDate.value = formatLocalDate(now)
   filters.value.start_date = startDate.value
   filters.value.end_date = endDate.value
-  pagination.page = 1
-  loadUsageLogs()
-  loadUsageStats()
-  loadKeySpendDistribution()
+  await refreshUsageData({ resetPage: true })
 }
 
 const handlePageChange = (page: number) => {
@@ -1297,6 +1332,35 @@ const escapeCSVValue = (value: unknown): string => {
   return str
 }
 
+const exportToCSVPages = async (
+  totalPages: number,
+  pageSize: number,
+  filters: UsageQueryParams
+): Promise<UsageLog[]> => {
+  const batchSize = 6
+  const pagesResult: UsageLog[][] = new Array(totalPages)
+
+  for (let startPage = 1; startPage <= totalPages; startPage += batchSize) {
+    const pageTasks = [] as Promise<UsageLog[]>[]
+    for (let page = startPage; page < startPage + batchSize && page <= totalPages; page++) {
+      pageTasks.push(
+        usageAPI
+          .query({ ...filters, page, page_size: pageSize })
+          .then((response) => response.items)
+      )
+    }
+    const pageResponses = await Promise.all(pageTasks)
+    pageResponses.forEach((items, index) => {
+      const pageIndex = startPage + index - 1
+      pagesResult[pageIndex] = items
+    })
+  }
+
+  return pagesResult
+    .filter((records): records is UsageLog[] => Array.isArray(records))
+    .flat()
+}
+
 const exportToCSV = async () => {
   if (pagination.total === 0) {
     appStore.showWarning(t('usage.noDataToExport'))
@@ -1307,19 +1371,17 @@ const exportToCSV = async () => {
   appStore.showInfo(t('usage.preparingExport'))
 
   try {
-    const allLogs: UsageLog[] = []
-    const pageSize = 100 // Use a larger page size for export to reduce requests
-    const totalRequests = Math.ceil(pagination.total / pageSize)
-
-    for (let page = 1; page <= totalRequests; page++) {
-      const params: UsageQueryParams = {
-        page: page,
-        page_size: pageSize,
-        ...getActiveFilters()
-      }
-      const response = await usageAPI.query(params)
-      allLogs.push(...response.items)
+    const exportPageSize = 500
+    const filters = {
+      ...getActiveFilters()
     }
+    const totalPages = Math.ceil((pagination.total || 0) / exportPageSize)
+    if (totalPages <= 0) {
+      appStore.showWarning(t('usage.noDataToExport'))
+      return
+    }
+
+    const allLogs = await exportToCSVPages(totalPages, exportPageSize, filters)
 
     if (allLogs.length === 0) {
       appStore.showWarning(t('usage.noDataToExport'))
@@ -1372,7 +1434,7 @@ const exportToCSV = async () => {
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `usage_${filters.value.start_date}_to_${filters.value.end_date}.csv`
+    link.download = `usage_${filters.start_date}_to_${filters.end_date}.csv`
     link.click()
     window.URL.revokeObjectURL(url)
 
@@ -1419,10 +1481,7 @@ const hideTokenTooltip = () => {
 }
 
 onMounted(() => {
-  loadApiKeys().finally(() => {
-    loadKeySpendDistribution()
-  })
-  loadUsageLogs()
-  loadUsageStats()
+  loadApiKeys()
+  refreshUsageData()
 })
 </script>

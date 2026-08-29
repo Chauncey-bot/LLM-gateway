@@ -19,7 +19,7 @@
     <string>StrictHostKeyChecking=no</string>
     <string>-N</string>
     <string>-L</string>
-    <string>127.0.0.1:25432:172.21.0.2:5432</string>
+    <string>127.0.0.1:25432:18.143.67.94:5432</string>
     <string>ubuntu@18.143.67.94</string>
   </array>
   <key>RunAtLoad</key>

@@ -35,3 +35,31 @@ test("a normal plan remains the next-day baseline alongside a temporary plan", (
     { currentDailyQuota: 400, renewalDailyQuota: 400 },
   );
 });
+
+test("explicit daily quota type still only contributes on the purchase day", () => {
+  const subscription = {
+    status: "active",
+    quota_duration_type: "daily",
+    starts_at: "2026-08-07T12:00:00.000+08:00",
+    expires_at: "2026-09-06T12:00:00.000+08:00",
+    group: { daily_limit_usd: 120 },
+  };
+  assert.deepEqual(
+    calculatePlanDailyQuotaProfile([subscription], new Date("2026-08-07T23:00:00.000+08:00")),
+    { currentDailyQuota: 120, renewalDailyQuota: 0 },
+  );
+});
+
+test("explicit monthly quota type contributes to renewal baseline even with short validity", () => {
+  const subscription = {
+    status: "active",
+    quota_duration_type: "monthly",
+    starts_at: "2026-08-07T12:00:00.000+08:00",
+    expires_at: "2026-08-08T13:00:00.000+08:00",
+    group: { daily_limit_usd: 120 },
+  };
+  assert.deepEqual(
+    calculatePlanDailyQuotaProfile([subscription], new Date("2026-08-07T23:00:00.000+08:00")),
+    { currentDailyQuota: 120, renewalDailyQuota: 120 },
+  );
+});
