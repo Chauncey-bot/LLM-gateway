@@ -1,10 +1,9 @@
-import crypto from "node:crypto";
 import http from "node:http";
 
 import express from "express";
 import pg from "pg";
 
-import { chinaDay, decideReservation, estimateReservationUsd, normalizeQuotaState } from "./quota-engine.mjs";
+import { chinaDay } from "./quota-engine.mjs";
 
 const { Pool } = pg;
 
@@ -26,12 +25,18 @@ const config = {
     password: process.env.SUB2API_DB_PASSWORD || process.env.DB_PASSWORD || "",
   },
   internalKey: process.env.QUOTA_GATEWAY_INTERNAL_KEY || "",
-  defaultHoldUsd: Number(process.env.QUOTA_GATEWAY_DEFAULT_HOLD_USD || 5),
-  maxHoldUsd: Number(process.env.QUOTA_GATEWAY_MAX_HOLD_USD || 10),
-  maxUsdPer1kTokens: Number(process.env.QUOTA_GATEWAY_MAX_USD_PER_1K_TOKENS || 0.1),
-  usagePollDelayMs: Number(process.env.QUOTA_GATEWAY_USAGE_POLL_DELAY_MS || 1_000),
-  usagePollAttempts: Number(process.env.QUOTA_GATEWAY_USAGE_POLL_ATTEMPTS || 10),
+  sub2apiAdminEmail: process.env.SUB2API_ADMIN_EMAIL || "",
+  sub2apiAdminPassword: process.env.SUB2API_ADMIN_PASSWORD || "",
+  expiredHoldCleanupIntervalMs: Number(process.env.QUOTA_GATEWAY_EXPIRED_HOLD_CLEANUP_INTERVAL_MS || 60_000),
+  expiredHoldCleanupBatchSize: Number(process.env.QUOTA_GATEWAY_EXPIRED_HOLD_CLEANUP_BATCH_SIZE || 500),
 };
+
+const CLEANUP_INTERVAL_MS = Number.isFinite(config.expiredHoldCleanupIntervalMs) && config.expiredHoldCleanupIntervalMs > 0
+  ? config.expiredHoldCleanupIntervalMs
+  : 0;
+const CLEANUP_BATCH_SIZE = Number.isFinite(config.expiredHoldCleanupBatchSize) && config.expiredHoldCleanupBatchSize > 0
+  ? Math.floor(config.expiredHoldCleanupBatchSize)
+  : 500;
 
 export async function ensureQuotaSchema(db) {
   await db.query(`
@@ -65,6 +70,43 @@ export async function ensureQuotaSchema(db) {
   `);
   await db.query(`ALTER TABLE traffic_pack_quota_holds ADD COLUMN IF NOT EXISTS daily_window_start DATE;`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_traffic_pack_quota_holds_pending ON traffic_pack_quota_holds (status, expires_at);`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS traffic_pack_runtime_states (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      china_day DATE NOT NULL,
+      generation INTEGER NOT NULL,
+      template_group_id BIGINT NOT NULL,
+      runtime_group_id BIGINT,
+      runtime_subscription_id BIGINT,
+      bonus_limit_usd NUMERIC(20,8) NOT NULL,
+      status TEXT NOT NULL DEFAULT 'provisioning',
+      expires_at TIMESTAMPTZ NOT NULL,
+      error_message TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (user_id, china_day, generation)
+    );
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS traffic_pack_key_switches (
+      runtime_state_id BIGINT NOT NULL REFERENCES traffic_pack_runtime_states(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL,
+      china_day DATE NOT NULL,
+      api_key_id BIGINT NOT NULL,
+      original_group_id BIGINT NOT NULL,
+      runtime_group_id BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'switching',
+      switched_at TIMESTAMPTZ,
+      restored_at TIMESTAMPTZ,
+      error_message TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (runtime_state_id, api_key_id)
+    );
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_traffic_pack_runtime_active ON traffic_pack_runtime_states (user_id, china_day, generation DESC) WHERE status IN ('provisioning', 'active', 'closing');`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_traffic_pack_key_switch_user ON traffic_pack_key_switches (user_id, china_day, status);`);
 }
 
 function isInternalRequest(req) {
@@ -98,62 +140,57 @@ function dbRowToState(row) {
   };
 }
 
-async function normalizeStateInTransaction(client, row, now = new Date()) {
-  const state = normalizeQuotaState(dbRowToState(row), now);
-  if (!state?.changed) return state;
-  const result = await client.query(
-    `UPDATE traffic_pack_quota_states
-        SET daily_window_start = $2,
-            base_daily_quota_usd = $3,
-            effective_daily_quota_usd = $4,
-            daily_usage_usd = $5,
-            reserved_usage_usd = $6,
-            traffic_pack_expires_at = $7,
-            updated_at = NOW()
-      WHERE user_id = $1
-      RETURNING *`,
-    [state.userId, state.dailyWindowStart, state.baseDailyQuota, state.effectiveDailyQuota, state.dailyUsageUsd, state.reservedUsageUsd, state.trafficPackExpiresAt],
-  );
-  await client.query(
-    `UPDATE traffic_pack_quota_holds
+export async function releaseExpiredQuotaHolds(quotaDb, { batchSize = CLEANUP_BATCH_SIZE } = {}) {
+  const client = await quotaDb.connect();
+  const safeBatchSize = Math.max(1, Math.min(5_000, Number(batchSize) || CLEANUP_BATCH_SIZE));
+  try {
+    await client.query("BEGIN");
+    const toRelease = await client.query(
+      `
+      WITH to_release AS (
+        SELECT request_id, user_id, reserved_usd
+        FROM traffic_pack_quota_holds
+        WHERE status = 'pending'
+          AND expires_at <= NOW()
+        ORDER BY expires_at ASC
+        LIMIT $1
+      ),
+      released AS (
+        UPDATE traffic_pack_quota_holds h
         SET status = 'released', settled_at = NOW()
-      WHERE user_id = $1
-        AND status = 'pending'
-        AND daily_window_start IS NOT NULL
-        AND daily_window_start < $2`,
-    [state.userId, state.dailyWindowStart],
-  );
-  return dbRowToState(result.rows[0]);
-}
+        FROM to_release r
+        WHERE h.request_id = r.request_id
+        RETURNING r.user_id, r.reserved_usd
+      )
+      SELECT user_id, SUM(reserved_usd) AS released_reserved_sum, COUNT(*) AS released_cnt
+      FROM released
+      GROUP BY user_id
+      `,
+      [safeBatchSize],
+    );
 
-export async function reserveQuota(quotaDb, { userId, apiKeyId, amountUsd, requestId = crypto.randomUUID(), now = new Date() }) {
-  const client = await quotaDb.connect();
-  try {
-    await client.query("BEGIN");
-    const { rows } = await client.query("SELECT * FROM traffic_pack_quota_states WHERE user_id = $1 FOR UPDATE", [userId]);
-    if (!rows.length) {
-      await client.query("COMMIT");
-      return { managed: false, requestId };
+    const rows = toRelease.rows || [];
+    let releasedRequests = 0;
+    for (const row of rows) {
+      const releasedReserved = Number(row.released_reserved_sum || 0);
+      if (releasedReserved > 0) {
+        await client.query(
+          `UPDATE traffic_pack_quota_states
+              SET reserved_usage_usd = GREATEST(0, reserved_usage_usd - $2)
+            WHERE user_id = $1`,
+          [row.user_id, releasedReserved],
+        );
+      }
+      releasedRequests += Number(row.released_cnt || 0);
     }
-    const state = await normalizeStateInTransaction(client, rows[0], now);
-    const decision = decideReservation(state, amountUsd, now);
-    if (!decision.allowed) {
-      await client.query("ROLLBACK");
-      return { managed: true, allowed: false, requestId, remainingUsd: decision.remainingUsd };
-    }
-    await client.query(
-      `UPDATE traffic_pack_quota_states
-          SET reserved_usage_usd = reserved_usage_usd + $2, updated_at = NOW()
-        WHERE user_id = $1`,
-      [userId, amountUsd],
-    );
-    await client.query(
-      `INSERT INTO traffic_pack_quota_holds (request_id, user_id, api_key_id, daily_window_start, reserved_usd, expires_at)
-       VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '30 minutes')`,
-      [requestId, userId, apiKeyId, state.dailyWindowStart, amountUsd],
-    );
+
     await client.query("COMMIT");
-    return { managed: true, allowed: true, requestId };
+    return {
+      scannedUsers: rows.length,
+      releasedRequests,
+      releasedReservedSum: rows.reduce((acc, row) => acc + Number(row.released_reserved_sum || 0), 0),
+      batchSize: safeBatchSize,
+    };
   } catch (error) {
     try { await client.query("ROLLBACK"); } catch {}
     throw error;
@@ -162,69 +199,36 @@ export async function reserveQuota(quotaDb, { userId, apiKeyId, amountUsd, reque
   }
 }
 
-export async function releaseQuotaHold(quotaDb, requestId) {
-  const client = await quotaDb.connect();
-  try {
-    await client.query("BEGIN");
-    const { rows } = await client.query(
-      "SELECT * FROM traffic_pack_quota_holds WHERE request_id = $1 FOR UPDATE",
-      [requestId],
-    );
-    const hold = rows[0];
-    if (!hold || hold.status !== "pending") {
-      await client.query("COMMIT");
-      return false;
-    }
-    await client.query(
-      "UPDATE traffic_pack_quota_states SET reserved_usage_usd = GREATEST(0, reserved_usage_usd - $2), updated_at = NOW() WHERE user_id = $1",
-      [hold.user_id, hold.reserved_usd],
-    );
-    await client.query("UPDATE traffic_pack_quota_holds SET status = 'released', settled_at = NOW() WHERE request_id = $1", [requestId]);
-    await client.query("COMMIT");
-    return true;
-  } catch (error) {
-    try { await client.query("ROLLBACK"); } catch {}
-    throw error;
-  } finally {
-    client.release();
+function startExpiredHoldCleanup(quotaDb) {
+  if (!CLEANUP_INTERVAL_MS) {
+    return;
   }
-}
-
-export async function settleQuotaHold(quotaDb, requestId, actualUsageUsd) {
-  const client = await quotaDb.connect();
-  try {
-    await client.query("BEGIN");
-    const { rows } = await client.query("SELECT * FROM traffic_pack_quota_holds WHERE request_id = $1 FOR UPDATE", [requestId]);
-    const hold = rows[0];
-    if (!hold || hold.status !== "pending") {
-      await client.query("COMMIT");
-      return false;
+  let running = false;
+  const runCleanup = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const result = await releaseExpiredQuotaHolds(quotaDb);
+      if (result.releasedRequests > 0) {
+        console.log(
+          `[quota-gateway] cleanup released ${result.releasedRequests} expired holds across ${result.scannedUsers} user(s), ` +
+          `reserved=${result.releasedReservedSum.toFixed(8)}`,
+        );
+      }
+    } catch (error) {
+      console.error(`[quota-gateway] expired hold cleanup failed: ${error?.message || error}`);
+    } finally {
+      running = false;
     }
-    await client.query(
-      `UPDATE traffic_pack_quota_states
-          SET reserved_usage_usd = GREATEST(0, reserved_usage_usd - $2),
-              daily_usage_usd = daily_usage_usd + $3,
-              updated_at = NOW()
-        WHERE user_id = $1`,
-      [hold.user_id, hold.reserved_usd, Math.max(0, Number(actualUsageUsd) || 0)],
-    );
-    await client.query(
-      "UPDATE traffic_pack_quota_holds SET status = 'settled', actual_usage_usd = $2, settled_at = NOW() WHERE request_id = $1",
-      [requestId, Math.max(0, Number(actualUsageUsd) || 0)],
-    );
-    await client.query("COMMIT");
-    return true;
-  } catch (error) {
-    try { await client.query("ROLLBACK"); } catch {}
-    throw error;
-  } finally {
-    client.release();
-  }
+  };
+  runCleanup();
+  const timer = setInterval(runCleanup, CLEANUP_INTERVAL_MS);
+  if (timer.unref) timer.unref();
 }
 
 async function findApiKeyOwner(upstreamDb, rawKey) {
   const { rows } = await upstreamDb.query(
-    `SELECT id, user_id
+    `SELECT id, user_id, group_id
        FROM api_keys
       WHERE key = $1 AND status = 'active' AND deleted_at IS NULL
       LIMIT 1`,
@@ -233,71 +237,175 @@ async function findApiKeyOwner(upstreamDb, rawKey) {
   return rows[0] || null;
 }
 
-async function settleFromUpstreamUsage({ quotaDb, upstreamDb, requestId, apiKeyId }) {
-  for (let attempt = 0; attempt < config.usagePollAttempts; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, config.usagePollDelayMs));
-    const { rows } = await upstreamDb.query(
-      `SELECT total_cost FROM usage_logs WHERE request_id = $1 AND api_key_id = $2 ORDER BY id DESC LIMIT 1`,
-      [requestId, apiKeyId],
-    );
-    if (rows.length) {
-      await settleQuotaHold(quotaDb, requestId, rows[0].total_cost);
-      return;
-    }
-  }
-  await releaseQuotaHold(quotaDb, requestId);
+export function isDailyLimitExceededResponse(statusCode, body) {
+  if (Number(statusCode) !== 429) return false;
+  const text = Buffer.isBuffer(body) ? body.toString("utf8") : String(body || "");
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch {}
+  const code = String(parsed?.error?.code || parsed?.code || parsed?.reason || "").toUpperCase();
+  const message = String(parsed?.error?.message || parsed?.message || text).toLowerCase();
+  return code === "DAILY_LIMIT_EXCEEDED" || message.includes("daily usage limit exceeded");
 }
 
-function createProxyHandler({ quotaDb, upstreamDb }) {
+function createAdminApiKeySwitcher({ upstreamBaseUrl, email, password }) {
+  let token = null;
+  let expiresAt = 0;
+  async function getToken() {
+    if (token && Date.now() < expiresAt - 60_000) return token;
+    if (!email || !password) throw new Error("Missing Sub2API admin credentials for traffic-pack switching");
+    const response = await fetch(`${upstreamBaseUrl}/api/v1/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const json = await response.json();
+    if (!response.ok || (typeof json?.code === "number" && json.code !== 0)) {
+      throw new Error(`Sub2API admin login failed (${response.status})`);
+    }
+    const data = Object.prototype.hasOwnProperty.call(json, "data") ? json.data : json;
+    token = data?.access_token;
+    expiresAt = Date.now() + Number(data?.expires_in || 3600) * 1000;
+    if (!token) throw new Error("Sub2API admin login returned no access token");
+    return token;
+  }
+  return async (apiKeyId, groupId) => {
+    const accessToken = await getToken();
+    const response = await fetch(`${upstreamBaseUrl}/api/v1/admin/api-keys/${Number(apiKeyId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ group_id: Number(groupId) }),
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`Sub2API API-key group update failed (${response.status}): ${text.slice(0, 200)}`);
+  };
+}
+
+export async function switchApiKeyToTrafficPack({ quotaDb, owner, switchApiKeyGroup }) {
+  const { rows } = await quotaDb.query(
+    `SELECT * FROM traffic_pack_runtime_states
+      WHERE user_id = $1
+        AND china_day = (NOW() AT TIME ZONE 'Asia/Shanghai')::date
+        AND status = 'active' AND expires_at > NOW()
+      ORDER BY generation DESC LIMIT 1`,
+    [Number(owner.user_id)],
+  );
+  const runtime = rows[0];
+  if (!runtime?.runtime_group_id) return { switched: false, reason: "no_active_runtime" };
+  if (Number(owner.group_id) === Number(runtime.runtime_group_id)) {
+    return { switched: false, reason: "already_on_runtime" };
+  }
+  if (!Number(owner.group_id)) return { switched: false, reason: "missing_original_group" };
+
+  await quotaDb.query(
+    `INSERT INTO traffic_pack_key_switches (
+       runtime_state_id, user_id, china_day, api_key_id, original_group_id, runtime_group_id, status
+     ) VALUES ($1, $2, $3, $4, $5, $6, 'switching')
+     ON CONFLICT (runtime_state_id, api_key_id) DO UPDATE
+       SET runtime_group_id = EXCLUDED.runtime_group_id, status = 'switching', error_message = NULL, updated_at = NOW()`,
+    [runtime.id, owner.user_id, runtime.china_day, owner.id, owner.group_id, runtime.runtime_group_id],
+  );
+  try {
+    await switchApiKeyGroup(owner.id, runtime.runtime_group_id);
+    await quotaDb.query(
+      `UPDATE traffic_pack_key_switches
+          SET status = 'switched', switched_at = NOW(), error_message = NULL, updated_at = NOW()
+        WHERE runtime_state_id = $1 AND api_key_id = $2`,
+      [runtime.id, owner.id],
+    );
+    return { switched: true, runtimeGroupId: Number(runtime.runtime_group_id) };
+  } catch (error) {
+    await quotaDb.query(
+      `UPDATE traffic_pack_key_switches SET status = 'failed', error_message = $3, updated_at = NOW()
+        WHERE runtime_state_id = $1 AND api_key_id = $2`,
+      [runtime.id, owner.id, error instanceof Error ? error.message : String(error)],
+    );
+    throw error;
+  }
+}
+
+async function readRequestBody(req, maxBytes = 64 * 1024 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error("Request body exceeds gateway replay limit");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+function sendUpstream({ req, res, upstreamBaseUrl, body, captureDailyLimit }) {
+  return new Promise((resolve, reject) => {
+    const upstream = new URL(`${upstreamBaseUrl}${req.originalUrl}`);
+    const headers = { ...req.headers, host: upstream.host };
+    delete headers.connection;
+    const proxyReq = http.request(upstream, { method: req.method, headers }, (proxyRes) => {
+      if (captureDailyLimit && proxyRes.statusCode === 429) {
+        const chunks = [];
+        let size = 0;
+        proxyRes.on("data", (chunk) => {
+          size += chunk.length;
+          if (size <= 1024 * 1024) chunks.push(chunk);
+        });
+        proxyRes.on("end", () => resolve({
+          captured: true,
+          statusCode: proxyRes.statusCode,
+          headers: proxyRes.headers,
+          body: Buffer.concat(chunks),
+        }));
+        return;
+      }
+      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+      proxyRes.pipe(res);
+      resolve({ captured: false });
+    });
+    proxyReq.on("error", reject);
+    if (body.length) proxyReq.write(body);
+    proxyReq.end();
+  });
+}
+
+function createProxyHandler({ quotaDb, upstreamDb, upstreamBaseUrl = config.upstreamBaseUrl, switchApiKeyGroup }) {
   return async (req, res) => {
     const apiKey = parseApiKey(req);
     if (!apiKey) return jsonError(res, 401, "Missing API key");
     const owner = await findApiKeyOwner(upstreamDb, apiKey);
     if (!owner) return jsonError(res, 401, "Invalid API key");
 
-    const requestId = crypto.randomUUID();
-    let body = null;
-    const contentType = req.get("content-type") || "";
-    if (contentType.includes("application/json") && req.body && typeof req.body === "object") body = req.body;
-    const estimatedUsd = estimateReservationUsd({
-      contentLength: req.get("content-length"), body, defaultHoldUsd: config.defaultHoldUsd, maxHoldUsd: config.maxHoldUsd, maxUsdPer1kTokens: config.maxUsdPer1kTokens,
-    });
-    const hold = await reserveQuota(quotaDb, {
-      userId: Number(owner.user_id), apiKeyId: Number(owner.id), amountUsd: estimatedUsd, requestId,
-    });
-    if (hold.managed && !hold.allowed) {
-      return jsonError(res, 429, "Daily quota exhausted");
-    }
-
-    const upstream = new URL(`${config.upstreamBaseUrl}${req.originalUrl}`);
-    const headers = {
-      ...req.headers,
-      host: upstream.host,
-      "x-request-id": requestId,
-      "x-client-request-id": requestId,
-    };
-    delete headers.connection;
-    const proxyReq = http.request(upstream, { method: req.method, headers }, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
-      proxyRes.pipe(res);
-      proxyRes.on("end", () => {
-        if (!hold.managed) return;
-        if ((proxyRes.statusCode || 500) >= 400) {
-          void releaseQuotaHold(quotaDb, requestId);
-        } else {
-          void settleFromUpstreamUsage({ quotaDb, upstreamDb, requestId, apiKeyId: Number(owner.id) });
-        }
-      });
-    });
-    proxyReq.on("error", async () => {
-      if (hold.managed) await releaseQuotaHold(quotaDb, requestId);
+    try {
+      const body = await readRequestBody(req);
+      const first = await sendUpstream({ req, res, upstreamBaseUrl, body, captureDailyLimit: true });
+      if (!first.captured) return;
+      if (!isDailyLimitExceededResponse(first.statusCode, first.body)) {
+        res.writeHead(first.statusCode, first.headers);
+        res.end(first.body);
+        return;
+      }
+      const switched = await switchApiKeyToTrafficPack({ quotaDb, owner, switchApiKeyGroup });
+      if (!switched.switched) {
+        res.writeHead(first.statusCode, first.headers);
+        res.end(first.body);
+        return;
+      }
+      await sendUpstream({ req, res, upstreamBaseUrl, body, captureDailyLimit: false });
+    } catch (error) {
+      console.error(`[quota-gateway] request failed: ${error?.message || error}`);
       if (!res.headersSent) jsonError(res, 502, "Upstream gateway unavailable");
-    });
-    req.pipe(proxyReq);
+    }
   };
 }
 
-export function createApp({ quotaDb = new Pool(config.quotaDb), upstreamDb = new Pool(config.upstreamDb) } = {}) {
+export function createApp({
+  quotaDb = new Pool(config.quotaDb),
+  upstreamDb = new Pool(config.upstreamDb),
+  upstreamBaseUrl = config.upstreamBaseUrl,
+  startReaper = false,
+  switchApiKeyGroup = createAdminApiKeySwitcher({
+    upstreamBaseUrl,
+    email: config.sub2apiAdminEmail,
+    password: config.sub2apiAdminPassword,
+  }),
+} = {}) {
   const app = express();
   app.disable("x-powered-by");
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
@@ -307,7 +415,10 @@ export function createApp({ quotaDb = new Pool(config.quotaDb), upstreamDb = new
     const { rows } = await quotaDb.query("SELECT * FROM traffic_pack_quota_states WHERE user_id = $1", [Number(req.params.userId)]);
     res.json(dbRowToState(rows[0]) || null);
   });
-  app.all("*", createProxyHandler({ quotaDb, upstreamDb }));
+  app.all("*", createProxyHandler({ quotaDb, upstreamDb, upstreamBaseUrl, switchApiKeyGroup }));
+  if (startReaper) {
+    startExpiredHoldCleanup(quotaDb);
+  }
   return app;
 }
 
@@ -315,7 +426,7 @@ if (process.argv[1] && new URL(`file://${process.argv[1]}`).href === import.meta
   const quotaDb = new Pool(config.quotaDb);
   const upstreamDb = new Pool(config.upstreamDb);
   await ensureQuotaSchema(quotaDb);
-  createApp({ quotaDb, upstreamDb }).listen(config.port, () => {
+  createApp({ quotaDb, upstreamDb, startReaper: true }).listen(config.port, () => {
     console.log(`[quota-gateway] listening on :${config.port}, upstream=${config.upstreamBaseUrl}, day=${chinaDay()}`);
   });
 }

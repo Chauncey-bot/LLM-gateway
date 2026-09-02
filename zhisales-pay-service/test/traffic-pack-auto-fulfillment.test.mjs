@@ -15,11 +15,21 @@ globalThis.fetch = async (url, options = {}) => {
       items: [
         {
           id: 88,
+          group_id: 16,
           status: "active",
-          group: { daily_limit_usd: 2800 },
+          group: { id: 16, daily_limit_usd: 2800 },
         },
       ],
     });
+  }
+  if (pathname === "/api/v1/admin/groups/16/duplicate") {
+    return Response.json({ id: 116 });
+  }
+  if (pathname === "/api/v1/admin/groups/116" && options.method === "PUT") {
+    return Response.json({ id: 116 });
+  }
+  if (pathname === "/api/v1/admin/subscriptions/assign") {
+    return Response.json({ id: 188 });
   }
   throw new Error(`Unexpected fetch: ${url}`);
 };
@@ -32,6 +42,7 @@ class TrafficPackFulfillmentClient {
     this.effectiveQuota = null;
     this.events = [];
     this.commands = [];
+    this.runtime = null;
   }
 
   async query(sql, params = []) {
@@ -51,6 +62,41 @@ class TrafficPackFulfillmentClient {
     }
     if (statement.startsWith("SELECT id, merchant_order_id, traffic_pack_bonus_usd") && statement.includes("> NOW()")) {
       return { rows: [] };
+    }
+    if (statement.startsWith("SELECT runtime_group_id FROM traffic_pack_runtime_states")) {
+      return { rows: this.runtime?.runtime_group_id ? [{ runtime_group_id: this.runtime.runtime_group_id }] : [] };
+    }
+    if (statement.startsWith("SELECT * FROM traffic_pack_runtime_states")) {
+      return { rows: this.runtime ? [this.runtime] : [] };
+    }
+    if (statement.startsWith("INSERT INTO traffic_pack_runtime_states")) {
+      this.runtime = {
+        id: 1,
+        user_id: params[0],
+        china_day: params[1],
+        generation: 1,
+        template_group_id: params[2],
+        bonus_limit_usd: params[3],
+        expires_at: params[4],
+        status: "provisioning",
+      };
+      return { rows: [this.runtime] };
+    }
+    if (statement.startsWith("UPDATE traffic_pack_runtime_states SET runtime_group_id")) {
+      this.runtime.runtime_group_id = params[1];
+      return { rows: [] };
+    }
+    if (statement.startsWith("UPDATE traffic_pack_runtime_states") && statement.includes("runtime_subscription_id")) {
+      this.runtime = {
+        ...this.runtime,
+        template_group_id: params[1],
+        runtime_group_id: params[2],
+        runtime_subscription_id: params[3],
+        bonus_limit_usd: params[4],
+        expires_at: params[5],
+        status: "active",
+      };
+      return { rows: [this.runtime] };
     }
     if (statement.startsWith("INSERT INTO user_extensions")) {
       this.effectiveQuota = Number(params[1]);

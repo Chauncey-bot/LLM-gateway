@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 path = Path(sys.argv[1])
 text = path.read_text()
-route = '''\t# Account daily-quota gateway; keep this before responses/compact and generic API handlers.\n\t@quota_api path /v1/* /responses* /models* /api/openai/* /api/anthropic/*\n\thandle @quota_api {\n\t\treverse_proxy 127.0.0.1:18193\n\t}\n\n'''
+route = '''\t# API compatibility gateway; keep this before responses/compact and generic API handlers.\n\t@quota_api path /v1/* /responses* /models* /api/openai/* /api/anthropic/*\n\thandle @quota_api {\n\t\treverse_proxy 127.0.0.1:18193\n\t}\n\n'''
 
 if '@quota_api path ' in text:
     print('quota route already present; no change')

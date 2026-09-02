@@ -11,12 +11,18 @@ Independent purchase page and payment bridge for the current `sub2api` skin.
 - Stores orders in a dedicated PostgreSQL database
 - Exposes order status APIs for the return page
 - Allows multiple paid traffic packs in one day; each pack immediately adds its
-  quota bonus to the current effective subscription quota. All of that day's
-  bonuses expire together at the next China midnight; the effective quota is
-  then recalculated from the current active subscription.
+  quota bonus to a separate native Sub2API subscription bucket. The user's API
+  Key remains on the normal plan until that plan returns the exact native daily
+  limit error; the external quota gateway then switches the Key and retries once.
+  All of that day's bonuses expire together at the next China midnight; switched
+  Keys are restored to their original group and the runtime subscription is revoked.
 - A user-triggered daily quota reset cancels all still-active traffic packs for
-  that day and restores the current active subscription quota. The cancellation
-  is retained in the traffic-pack event log and cannot be applied again later.
+  that day, restores every switched Key, and restores the current active
+  subscription quota. A later same-day purchase creates a fresh runtime bucket,
+  so cancelled usage is not inherited. The cancellation is retained in the
+  traffic-pack event log and cannot be applied again later.
+- Traffic packs never top up the user's general balance; their real allowance is
+  enforced exclusively by the native runtime subscription bucket.
 - Prepares fulfillment hooks for:
   - `POST /api/v1/admin/subscriptions/assign`
   - `POST /api/v1/admin/subscriptions/:id/extend`

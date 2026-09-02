@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "reap-expired-holds": "node scripts/reap-expired-holds.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

@@ -183,3 +183,17 @@ test("builds a balance top-up and subscription request for a designated subscrip
     },
   ]);
 });
+
+test("traffic packs do not top up the user's general balance", () => {
+  const order = {
+    merchant_order_id: "ZSALI202609020001",
+    sku_type: "traffic",
+    user_id: 123,
+    balance_amount: 100,
+  };
+
+  assert.throws(
+    () => buildOrderFulfillmentRequests(order),
+    /Unsupported sku_type: traffic/,
+  );
+});

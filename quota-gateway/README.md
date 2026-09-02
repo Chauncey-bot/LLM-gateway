@@ -1,18 +1,19 @@
-# 外置流量包额度网关
+# 外置 API 兼容网关
 
-该服务在不修改 Sub2API 源码、镜像或数据库结构的前提下，对 API 请求执行账户级的日额度控制。
+该服务在不修改 Sub2API 源码、镜像或数据库结构的前提下转发 API 请求。在线请求路径不再冻结额度，也不会根据本地日额度返回 429；每日额度允许出现并发超用。流量包由支付服务创建独立的 Sub2API 原生订阅额度桶，正常请求仍先使用套餐分组，只有收到 Sub2API 明确的 `DAILY_LIMIT_EXCEEDED` 后才切换当前 Key 并重试一次。
 
 ## 边界
 
-- 只读 Sub2API 的 `api_keys`（识别用户）和 `usage_logs`（结算实际消费）。
-- 只写支付库 `zhisales_pay` 内的 `traffic_pack_quota_states`、`traffic_pack_quota_holds`。
+- 只读 Sub2API 的 `api_keys` 以验证 API Key；请求本身仍由 Sub2API 处理。
+- 普通成功请求不读取或写入额度账本；只有明确的原生日额度 429 才读取 `traffic_pack_runtime_states` 并记录 `traffic_pack_key_switches`。
 - 支付服务是套餐基线、购买、过期和手动重置的唯一授权来源。
-- 网关会覆盖转发给上游的 `X-Request-ID`、`X-Client-Request-ID`，再用该 ID 从只读 `usage_logs` 找到实际消费金额。
-- 请求预占使用小额固定下限和可配置上限（`QUOTA_GATEWAY_DEFAULT_HOLD_USD`、`QUOTA_GATEWAY_MAX_HOLD_USD`）；请求体字节数只作保守估算，不能无限放大预占。
+- 流量包到期或手动重置后，支付服务会恢复所有已切换 Key 的原分组，并撤销本次运行时订阅。
+- `traffic_pack_quota_holds` 仅作为历史兼容表保留，不再创建新的 pending hold。
+- 过期 hold 清理器仅用于回收上线前遗留的冻结额度。
 
 ## 运行方式
 
-复制 `.env.example` 为 `.env` 并配置两个数据库连接。`QUOTA_DB_*` 指向 `zhisales_pay`，`SUB2API_DB_*` 指向 Sub2API 数据库；两个账号都应遵循最小权限原则，其中后者仅授予 `api_keys` 和 `usage_logs` 的 `SELECT` 权限。
+复制 `.env.example` 为 `.env` 并配置两个数据库连接及 `SUB2API_ADMIN_EMAIL`、`SUB2API_ADMIN_PASSWORD`。`QUOTA_DB_*` 指向 `zhisales_pay`，`SUB2API_DB_*` 指向 Sub2API 数据库；两个数据库账号都应遵循最小权限原则，其中后者仅需 `api_keys` 的 `SELECT` 权限。管理员凭据只用于通过官方 API 切换 Key 分组。
 
 ```bash
 npm install
@@ -20,10 +21,18 @@ npm test
 npm start
 ```
 
-将 `deploy/caddy-quota-route.caddy` 放在 Caddy 的 `/responses/compact` 和通用 `/api/*`、`/v1/*` 反向代理规则之前；否则紧凑 Responses 请求会绕过额度网关。可使用 `deploy/install-caddy-route.sh` 在生产的 `ai.zhisales.com`、`www.zhisales.com` 两个站点安装，脚本会先备份并校验 Caddy 配置后再 reload。该网关必须以失败关闭（fail closed）方式发布：额度账本或只读身份查询不可用时，不得绕过到上游。
+历史过期 hold 的清理：
+
+```bash
+QUOTA_GATEWAY_EXPIRED_HOLD_CLEANUP_BATCH_SIZE=500 \
+QUOTA_GATEWAY_EXPIRED_HOLD_REAPER_MAX_CYCLES=200 \
+npm run reap-expired-holds
+```
+
+服务本身也会在启动时按 `QUOTA_GATEWAY_EXPIRED_HOLD_CLEANUP_INTERVAL_MS` 周期性清理历史过期 hold（默认 60s）。新请求不会再产生 hold。
+
+将 `deploy/caddy-quota-route.caddy` 放在 Caddy 的 `/responses/compact` 和通用 `/api/*`、`/v1/*` 反向代理规则之前。可使用 `deploy/install-caddy-route.sh` 在生产的 `ai.zhisales.com`、`www.zhisales.com` 两个站点安装，脚本会先备份并校验 Caddy 配置后再 reload。
 
 ## 上游配置迁移
 
-对由网关托管的套餐分组，将 Sub2API 的订阅日额度设置为不限额；否则上游仍可能在网关放行后按旧分组额度拒绝请求。该调整是运营配置，不改变 Sub2API 代码或表结构。
-
-切换顺序：先建支付账本并启动网关，再切换 Caddy 路由，最后调整目标套餐分组。回滚时先恢复分组限额，再撤销 Caddy 路由，避免绕过额度控制。
+套餐分组继续保留 Sub2API 原生日额度。支付服务复制当前套餐分组的路由配置并为流量包创建独立原生订阅；多次购买只增加同一代额度桶上限，不重置已用量。手动重置后再次购买会创建新一代额度桶，避免继承已取消流量包的用量。

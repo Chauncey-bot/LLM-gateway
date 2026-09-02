@@ -57,11 +57,11 @@ test("one-day temporary plan plus packs never creates a second-day allowance", (
     group: { daily_limit_usd: 100 },
   };
   const sameDayPlan = calculatePlanDailyQuotaProfile([temporarySubscription], dayOne);
-  assert.deepEqual(sameDayPlan, { currentDailyQuota: 100, renewalDailyQuota: 0 });
+  assert.deepEqual(sameDayPlan, { currentDailyQuota: 100, renewalDailyQuota: 0, currentGroupId: null, currentSubscriptionId: null });
   assert.equal(calculateEffectiveDailyQuota({ baseDailyQuota: sameDayPlan.currentDailyQuota, packs: [pack(4, 100)], now: dayOne }).effectiveDailyQuota, 200);
 
   const afterMidnightPlan = calculatePlanDailyQuotaProfile([temporarySubscription], midnight);
-  assert.deepEqual(afterMidnightPlan, { currentDailyQuota: 0, renewalDailyQuota: 0 });
+  assert.deepEqual(afterMidnightPlan, { currentDailyQuota: 0, renewalDailyQuota: 0, currentGroupId: null, currentSubscriptionId: null });
   const nextDay = normalizeQuotaState({
     dailyWindowStart: "2026-08-07",
     baseDailyQuota: 100,

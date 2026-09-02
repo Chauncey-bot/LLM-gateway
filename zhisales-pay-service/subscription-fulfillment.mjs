@@ -29,7 +29,7 @@ export function pickMatchingSubscription(subscriptions, groupId) {
 }
 
 function resolveTopUpBalanceAmount(order) {
-  if (order.sku_type !== "subscription" && order.sku_type !== "traffic") {
+  if (order.sku_type !== "subscription") {
     return null;
   }
 

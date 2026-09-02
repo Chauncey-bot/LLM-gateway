@@ -12,11 +12,11 @@ test("one-day temporary subscription contributes only on its purchase day", () =
   };
   assert.deepEqual(
     calculatePlanDailyQuotaProfile([subscription], new Date("2026-08-07T23:00:00.000+08:00")),
-    { currentDailyQuota: 100, renewalDailyQuota: 0 },
+    { currentDailyQuota: 100, renewalDailyQuota: 0, currentGroupId: null, currentSubscriptionId: null },
   );
   assert.deepEqual(
     calculatePlanDailyQuotaProfile([subscription], new Date("2026-08-08T00:00:01.000+08:00")),
-    { currentDailyQuota: 0, renewalDailyQuota: 0 },
+    { currentDailyQuota: 0, renewalDailyQuota: 0, currentGroupId: null, currentSubscriptionId: null },
   );
 });
 
@@ -32,7 +32,7 @@ test("a normal plan remains the next-day baseline alongside a temporary plan", (
   ];
   assert.deepEqual(
     calculatePlanDailyQuotaProfile(subscriptions, new Date("2026-08-07T23:00:00.000+08:00")),
-    { currentDailyQuota: 400, renewalDailyQuota: 400 },
+    { currentDailyQuota: 400, renewalDailyQuota: 400, currentGroupId: null, currentSubscriptionId: null },
   );
 });
 
@@ -46,7 +46,7 @@ test("explicit daily quota type still only contributes on the purchase day", () 
   };
   assert.deepEqual(
     calculatePlanDailyQuotaProfile([subscription], new Date("2026-08-07T23:00:00.000+08:00")),
-    { currentDailyQuota: 120, renewalDailyQuota: 0 },
+    { currentDailyQuota: 120, renewalDailyQuota: 0, currentGroupId: null, currentSubscriptionId: null },
   );
 });
 
@@ -60,6 +60,17 @@ test("explicit monthly quota type contributes to renewal baseline even with shor
   };
   assert.deepEqual(
     calculatePlanDailyQuotaProfile([subscription], new Date("2026-08-07T23:00:00.000+08:00")),
-    { currentDailyQuota: 120, renewalDailyQuota: 120 },
+    { currentDailyQuota: 120, renewalDailyQuota: 120, currentGroupId: null, currentSubscriptionId: null },
+  );
+});
+
+test("returns the group and subscription that supply the largest current quota", () => {
+  const subscriptions = [
+    { id: 11, group_id: 4, status: "active", group: { id: 4, daily_limit_usd: 100 } },
+    { id: 22, group_id: 16, status: "active", group: { id: 16, daily_limit_usd: 400 } },
+  ];
+  assert.deepEqual(
+    calculatePlanDailyQuotaProfile(subscriptions, new Date("2026-08-07T23:00:00.000+08:00")),
+    { currentDailyQuota: 400, renewalDailyQuota: 400, currentGroupId: 16, currentSubscriptionId: 22 },
   );
 });

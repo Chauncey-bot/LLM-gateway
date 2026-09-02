@@ -49,6 +49,8 @@ export function calculatePlanDailyQuotaProfile(subscriptions, now = new Date()) 
   const today = chinaDay(now);
   let currentDailyQuota = 0;
   let renewalDailyQuota = 0;
+  let currentGroupId = null;
+  let currentSubscriptionId = null;
   for (const subscription of Array.isArray(subscriptions) ? subscriptions : []) {
     if (!subscription || subscription.status !== "active") continue;
     const quota = Number(subscription?.group?.daily_limit_usd);
@@ -57,14 +59,20 @@ export function calculatePlanDailyQuotaProfile(subscriptions, now = new Date()) 
     const expiry = expiryValue ? new Date(expiryValue).getTime() : Number.NaN;
     if (Number.isFinite(expiry) && expiry <= now.getTime()) continue;
     if (!isOneDayTemporarySubscription(subscription)) {
-      currentDailyQuota = Math.max(currentDailyQuota, quota);
+      if (quota > currentDailyQuota) {
+        currentDailyQuota = quota;
+        currentGroupId = Number(subscription.group_id || subscription.group?.id) || null;
+        currentSubscriptionId = Number(subscription.id) || null;
+      }
       renewalDailyQuota = Math.max(renewalDailyQuota, quota);
       continue;
     }
     const start = subscriptionStart(subscription);
-    if (start && chinaDay(start) === today) {
-      currentDailyQuota = Math.max(currentDailyQuota, quota);
+    if (start && chinaDay(start) === today && quota > currentDailyQuota) {
+      currentDailyQuota = quota;
+      currentGroupId = Number(subscription.group_id || subscription.group?.id) || null;
+      currentSubscriptionId = Number(subscription.id) || null;
     }
   }
-  return { currentDailyQuota, renewalDailyQuota };
+  return { currentDailyQuota, renewalDailyQuota, currentGroupId, currentSubscriptionId };
 }

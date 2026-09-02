@@ -10,12 +10,18 @@ import { buildOrderFulfillmentRequest } from "./subscription-fulfillment.mjs";
 import { fulfillSubscriptionWithRetry } from "./subscription-fulfillment-retry.mjs";
 import { normalizeSubscriptionListResponse } from "./subscription-list.mjs";
 import { resolveSubscriptionValidityDays } from "./subscription-duration.mjs";
+import { createPersistedTradingOrder } from "./payment-order-creation.mjs";
 import {
   calculateEffectiveDailyQuota,
   calculateTrafficPackPurchaseQuota,
   TRAFFIC_PACK_STATUS,
 } from "./traffic-pack-state.mjs";
 import { calculatePlanDailyQuotaProfile } from "./traffic-pack-plan-state.mjs";
+import {
+  ensureTrafficPackRuntimeSchema,
+  provisionTrafficPackRuntime,
+  restoreTrafficPackRuntime,
+} from "./traffic-pack-runtime.mjs";
 
 const { Pool } = pg;
 
@@ -505,6 +511,7 @@ async function initDb() {
   await pool.query(
     `CREATE INDEX IF NOT EXISTS idx_payment_orders_traffic_pack_reclaim ON payment_orders (traffic_pack_expires_at)\n   WHERE sku_type = 'traffic' AND COALESCE(traffic_pack_reverted, false) = false;`,
   );
+  await ensureTrafficPackRuntimeSchema(pool);
 }
 
 async function sub2apiJson(pathname, options = {}) {
@@ -973,13 +980,20 @@ async function lockTrafficPackUser(client, userId) {
   await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [Number(userId)]);
 }
 
-async function getCurrentPlanDailyQuotaProfile(userId) {
+async function getCurrentPlanDailyQuotaProfile(userId, db = pool) {
   const subscriptions = await listUserSubscriptions(userId);
-  return calculatePlanDailyQuotaProfile(subscriptions);
+  const { rows } = await db.query(
+    `SELECT runtime_group_id FROM traffic_pack_runtime_states WHERE user_id = $1 AND runtime_group_id IS NOT NULL`,
+    [Number(userId)],
+  );
+  const runtimeGroupIds = new Set(rows.map((row) => Number(row.runtime_group_id)));
+  return calculatePlanDailyQuotaProfile(subscriptions.filter((subscription) => (
+    !runtimeGroupIds.has(Number(subscription?.group_id || subscription?.group?.id))
+  )));
 }
 
-async function getCurrentPlanDailyQuota(userId, { required = true } = {}) {
-  const profile = await getCurrentPlanDailyQuotaProfile(userId);
+async function getCurrentPlanDailyQuota(userId, { required = true, db = pool } = {}) {
+  const profile = await getCurrentPlanDailyQuotaProfile(userId, db);
   if (profile.currentDailyQuota > 0) {
     return profile.currentDailyQuota;
   }
@@ -1038,7 +1052,7 @@ async function recordTrafficPackEvent(client, {
 }
 
 async function synchronizeEffectiveDailyQuota(client, userId, { requiredPlan = false } = {}) {
-  const planProfile = await getCurrentPlanDailyQuotaProfile(userId);
+  const planProfile = await getCurrentPlanDailyQuotaProfile(userId, client);
   const baseDailyQuota = planProfile.currentDailyQuota;
   if (requiredPlan && baseDailyQuota <= 0) {
     throw new Error("User does not have a finite current daily quota limit");
@@ -1152,7 +1166,7 @@ async function applyTrafficPackOrder(order, client) {
   // The subscription is always the source of the base quota. user_extensions
   // is only a projection of the currently effective quota, so an empty or
   // stale extension can never become a traffic-pack baseline.
-  const planProfile = await getCurrentPlanDailyQuotaProfile(order.user_id);
+  const planProfile = await getCurrentPlanDailyQuotaProfile(order.user_id, client);
   const baseDailyQuota = planProfile.currentDailyQuota;
   if (baseDailyQuota <= 0) {
     throw new Error("User does not have a finite current daily quota limit");
@@ -1164,6 +1178,20 @@ async function applyTrafficPackOrder(order, client) {
     bonusQuotaUsd,
   });
   const expiresAt = getTrafficPackExpiresAt();
+  if (!planProfile.currentGroupId) {
+    throw new Error("Current subscription has no routable group id");
+  }
+
+  // Keep the real allowance in a native Sub2API subscription bucket. The API
+  // key remains on its normal plan until the gateway observes the plan's exact
+  // daily-limit error, then switches to this bucket for the remaining bonus.
+  await provisionTrafficPackRuntime(client, {
+    userId: order.user_id,
+    templateGroupId: planProfile.currentGroupId,
+    bonusLimitUsd: newDailyQuota - baseDailyQuota,
+    expiresAt,
+    adminRequest: sub2apiAdminJson,
+  });
 
   await upsertUserDailyQuotaExtension(client, order.user_id, newDailyQuota);
 
@@ -1226,6 +1254,12 @@ async function reclaimExpiredTrafficPacksForUser(client, userId) {
     [Number(userId), TRAFFIC_PACK_STATUS.APPLIED],
   );
   if (!rows.length) {
+    await restoreTrafficPackRuntime(client, {
+      userId,
+      reason: "midnight",
+      adminRequest: sub2apiAdminJson,
+      onlyExpired: true,
+    });
     return { scanned: 0, reclaimed: 0 };
   }
 
@@ -1249,6 +1283,15 @@ async function reclaimExpiredTrafficPacksForUser(client, userId) {
     [Number(userId), TRAFFIC_PACK_STATUS.EXPIRED, TRAFFIC_PACK_STATUS.APPLIED],
   );
   const quota = await synchronizeEffectiveDailyQuota(client, userId);
+  const remainingPacks = await listAppliedTrafficPacks(client, userId, { forUpdate: true });
+  if (!remainingPacks.length) {
+    await restoreTrafficPackRuntime(client, {
+      userId,
+      reason: "midnight",
+      adminRequest: sub2apiAdminJson,
+      onlyExpired: true,
+    });
+  }
   for (const row of rows) {
     await recordTrafficPackEvent(client, {
       userId,
@@ -1265,9 +1308,14 @@ async function reclaimExpiredTrafficPacksForUser(client, userId) {
 async function resetActiveTrafficPacksForUser(client, userId) {
   await reclaimExpiredTrafficPacksForUser(client, userId);
   const rows = await listAppliedTrafficPacks(client, userId, { forUpdate: true });
-  const planProfile = await getCurrentPlanDailyQuotaProfile(userId);
+  const planProfile = await getCurrentPlanDailyQuotaProfile(userId, client);
   const baselineDailyQuota = planProfile.currentDailyQuota;
   if (!rows.length) {
+    await restoreTrafficPackRuntime(client, {
+      userId,
+      reason: "manual_reset",
+      adminRequest: sub2apiAdminJson,
+    });
     await upsertUserDailyQuotaExtension(client, userId, baselineDailyQuota);
     await upsertTrafficPackQuotaState(client, userId, {
       baseDailyQuota: baselineDailyQuota,
@@ -1301,6 +1349,11 @@ async function resetActiveTrafficPacksForUser(client, userId) {
       TRAFFIC_PACK_STATUS.APPLIED,
     ],
   );
+  await restoreTrafficPackRuntime(client, {
+    userId,
+    reason: "manual_reset",
+    adminRequest: sub2apiAdminJson,
+  });
   await upsertUserDailyQuotaExtension(client, userId, baselineDailyQuota);
   await upsertTrafficPackQuotaState(client, userId, {
     baseDailyQuota: baselineDailyQuota,
@@ -1335,13 +1388,20 @@ async function reconcileExpiredTrafficPacks(limit = 20) {
     await client.query("BEGIN");
     const { rows: userRows } = await client.query(
       `
-      SELECT DISTINCT user_id
-      FROM payment_orders
-      WHERE sku_type = 'traffic'
-        AND fulfillment_status = 'fulfilled'
-        AND traffic_pack_status = $1
-        AND traffic_pack_expires_at IS NOT NULL
-        AND traffic_pack_expires_at <= NOW()
+      SELECT DISTINCT user_id FROM (
+        SELECT user_id
+        FROM payment_orders
+        WHERE sku_type = 'traffic'
+          AND fulfillment_status = 'fulfilled'
+          AND traffic_pack_status = $1
+          AND traffic_pack_expires_at IS NOT NULL
+          AND traffic_pack_expires_at <= NOW()
+        UNION ALL
+        SELECT user_id
+        FROM traffic_pack_runtime_states
+        WHERE status IN ('provisioning', 'active', 'closing', 'error')
+          AND expires_at <= NOW()
+      ) candidates
       ORDER BY user_id ASC
       LIMIT $2
       `,
@@ -2006,38 +2066,73 @@ app.post("/pay-api/orders", async (req, res) => {
       amountCents: Number(sku.amount_cents),
       clientIp: req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() || req.socket.remoteAddress || "",
     };
-    const trading = await createTradingOrder(draftOrder, sku);
-    const { rows } = await client.query(
-      `
-      INSERT INTO payment_orders (
-        merchant_order_id, user_id, user_email, user_username, sku_type, sku_code, group_id,
-        validity_days, balance_amount, amount_cents, platform_order_no,
-        trade_status, fulfillment_status, raw_create_response
-      ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending','pending',$12
-      )
-      RETURNING *
-      `,
-      [
-        draftOrder.merchantOrderId,
-        draftOrder.userId,
-        draftOrder.userEmail,
-        draftOrder.userUsername,
-        draftOrder.skuType,
-        draftOrder.skuCode,
-        draftOrder.groupId,
-        draftOrder.validityDays,
-        draftOrder.balanceAmount,
-        draftOrder.amountCents,
-        trading.data.orderno || null,
-        JSON.stringify(trading.response),
-      ],
-    );
+    const { order, trading } = await createPersistedTradingOrder({
+      draftOrder,
+      sku,
+      insertDraft: async (draft) => {
+        await client.query(
+          `
+          INSERT INTO payment_orders (
+            merchant_order_id, user_id, user_email, user_username, sku_type, sku_code, group_id,
+            validity_days, balance_amount, amount_cents, trade_status, fulfillment_status
+          ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'created','pending'
+          )
+          `,
+          [
+            draft.merchantOrderId,
+            draft.userId,
+            draft.userEmail,
+            draft.userUsername,
+            draft.skuType,
+            draft.skuCode,
+            draft.groupId,
+            draft.validityDays,
+            draft.balanceAmount,
+            draft.amountCents,
+          ],
+        );
+      },
+      createTradingOrder,
+      storeTradingSuccess: async (draft, createdTrading) => {
+        const { rows } = await client.query(
+          `
+          UPDATE payment_orders
+          SET platform_order_no = $2,
+              trade_status = 'pending',
+              raw_create_response = $3,
+              error_message = NULL,
+              updated_at = NOW()
+          WHERE merchant_order_id = $1
+          RETURNING *
+          `,
+          [
+            draft.merchantOrderId,
+            createdTrading.data.orderno || null,
+            JSON.stringify(createdTrading.response),
+          ],
+        );
+        return rows[0];
+      },
+      storeTradingFailure: async (draft, error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        await client.query(
+          `
+          UPDATE payment_orders
+          SET trade_status = 'failed',
+              error_message = $2,
+              updated_at = NOW()
+          WHERE merchant_order_id = $1
+          `,
+          [draft.merchantOrderId, message],
+        );
+      },
+    });
 
     res.json({
       merchantOrderId,
       formHtml: trading.data.formHtml,
-      order: normalizeOrderRow(rows[0]),
+      order: normalizeOrderRow(order),
       querySupported: isQueryConfigured(),
     });
   } catch (error) {

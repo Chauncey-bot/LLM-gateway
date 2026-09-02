@@ -6,10 +6,21 @@ PAY_DIR="$ROOT_DIR/zhisales-pay-service"
 ENV_FILE="$PAY_DIR/.env"
 
 if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+  # Values such as payment tokens may contain shell metacharacters. Parse the
+  # dotenv file as data instead of sourcing it as shell code.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "${line:0:1}" == "#" || "$line" != *"="* ]] && continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    if [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && -z "${!key+x}" ]]; then
+      if [[ "${value:0:1}" == '"' && "${value: -1}" == '"' ]]; then
+        value="${value:1:${#value}-2}"
+      elif [[ "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
+        value="${value:1:${#value}-2}"
+      fi
+      export "$key=$value"
+    fi
+  done < "$ENV_FILE"
 fi
 
 DB_HOST="${DB_HOST:-127.0.0.1}"

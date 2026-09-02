@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { chinaDay, decideReservation, estimateReservationUsd, normalizeQuotaState, settleReservation } from "../quota-engine.mjs";
+import { chinaDay, normalizeQuotaState } from "../quota-engine.mjs";
 
 const today = new Date("2026-08-07T10:00:00.000+08:00");
 
@@ -41,60 +41,4 @@ test("a one-day temporary plan has no new daily allowance after midnight", () =>
   assert.equal(state.effectiveDailyQuota, 0);
   assert.equal(state.dailyUsageUsd, 0);
   assert.equal(state.reservedUsageUsd, 0);
-});
-
-test("all API keys share one account reservation limit", () => {
-  const decision = decideReservation({
-    dailyWindowStart: "2026-08-07",
-    baseDailyQuota: 400,
-    effectiveDailyQuota: 500,
-    dailyUsageUsd: 490,
-    reservedUsageUsd: 4,
-  }, 10, today);
-
-  assert.equal(decision.managed, true);
-  assert.equal(decision.allowed, false);
-  assert.equal(decision.remainingUsd, 6);
-});
-
-test("settlement replaces a hold with actual upstream usage", () => {
-  const settled = settleReservation({
-    dailyWindowStart: "2026-08-07",
-    baseDailyQuota: 400,
-    effectiveDailyQuota: 500,
-    dailyUsageUsd: 100,
-    reservedUsageUsd: 5,
-  }, 5, 1.25);
-
-  assert.equal(settled.dailyUsageUsd, 101.25);
-  assert.equal(settled.reservedUsageUsd, 0);
-});
-
-test("reservation estimate honors explicit maximum output tokens", () => {
-  const estimated = estimateReservationUsd({
-    contentLength: 4_000,
-    body: { max_tokens: 20_000 },
-    defaultHoldUsd: 0.5,
-    maxUsdPer1kTokens: 0.2,
-  });
-  assert.equal(estimated, 4.2);
-});
-
-test("reservation estimate caps a large JSON request body", () => {
-  const estimated = estimateReservationUsd({
-    contentLength: 10_411_145,
-    defaultHoldUsd: 5,
-    maxUsdPer1kTokens: 0.1,
-    maxHoldUsd: 10,
-  });
-  assert.equal(estimated, 10);
-});
-
-test("reservation estimate never falls below the configured default hold", () => {
-  const estimated = estimateReservationUsd({
-    contentLength: 0,
-    defaultHoldUsd: 5,
-    maxHoldUsd: 10,
-  });
-  assert.equal(estimated, 5);
 });
