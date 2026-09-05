@@ -10,10 +10,10 @@ export function nativeGroupQuota(sku) {
   const mode = resolveQuotaMode(sku);
   const amount = Number(mode === "cumulative" ? sku.total_quota_usd : sku.daily_limit_usd);
   if (!Number.isFinite(amount) || amount <= 0) throw new Error(`Invalid quota amount for ${sku.code}`);
-  // The monthly native cap is defense in depth; lifetime usage is enforced by
-  // our gateway because Sub2API can reset monthly windows independently.
+  // Native month windows span multiple purchases. Only our purchase-period
+  // limiter may enforce cumulative quota; leaving a monthly cap rejects fresh purchases.
   return { daily_limit_usd: mode === "daily_fixed" ? amount : 0,
-    weekly_limit_usd: 0, monthly_limit_usd: mode === "cumulative" ? amount : 0 };
+    weekly_limit_usd: 0, monthly_limit_usd: 0 };
 }
 
 export function assertNativeGroupQuota(sku, group) {

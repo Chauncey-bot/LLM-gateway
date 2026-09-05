@@ -1,0 +1,12 @@
+# Install before generic /api/* and static SPA routes. Authentication is still
+# performed by Sub2API with the original caller's bearer token.
+@quota_subscription_reads {
+  method GET
+  path_regexp quota_subscriptions ^/api/v1/((admin/)?subscriptions(/active|/[0-9]+)?|admin/users/[0-9]+/subscriptions)$
+}
+handle @quota_subscription_reads {
+  reverse_proxy 127.0.0.1:18193
+}
+handle /quota-ui/* {
+  reverse_proxy 127.0.0.1:18193
+}

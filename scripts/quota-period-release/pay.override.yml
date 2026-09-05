@@ -1,0 +1,5 @@
+services:
+  zhisales-pay:
+    image: zhisales-pay-service:quota-period-20260905-2220
+    volumes:
+      - /home/ubuntu/zhisales-release-quota-modes-20260905-2118/zhisales-pay-service/catalog.json:/app/catalog.json:ro

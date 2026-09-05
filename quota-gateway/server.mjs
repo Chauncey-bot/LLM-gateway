@@ -5,6 +5,7 @@ import pg from "pg";
 
 import { chinaDay } from "./quota-engine.mjs";
 import { checkCumulativeQuota } from "./cumulative-quota.mjs";
+import { installSubscriptionPresentation } from "./subscription-presentation.mjs";
 
 const { Pool } = pg;
 
@@ -374,7 +375,7 @@ function createProxyHandler({ quotaDb, upstreamDb, upstreamBaseUrl = config.upst
     if (!owner) return jsonError(res, 401, "Invalid API key");
 
     try {
-      const cumulative = await checkCumulativeQuota(upstreamDb, owner);
+      const cumulative = await checkCumulativeQuota(upstreamDb, owner, undefined, new Date(), quotaDb);
       if (cumulative && !cumulative.allowed) {
         return res.status(cumulative.status).json({ error: { code: cumulative.code, message: cumulative.message } });
       }
@@ -413,6 +414,7 @@ export function createApp({
 } = {}) {
   const app = express();
   app.disable("x-powered-by");
+  installSubscriptionPresentation(app, {upstreamDb, quotaDb, upstreamBaseUrl});
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
   app.use("/internal", express.json({ limit: "128kb" }));
   app.get("/internal/users/:userId/quota", async (req, res) => {

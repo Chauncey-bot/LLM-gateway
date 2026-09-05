@@ -13,6 +13,7 @@
     "pg": "^8.13.3"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.8"
+    "@electric-sql/pglite": "^0.5.8",
+    "jsdom": "^24.1.3"
   }
 }

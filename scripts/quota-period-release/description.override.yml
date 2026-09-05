@@ -1,0 +1,3 @@
+services:
+  quota-gateway:
+    image: zhisales-quota-gateway:quota-description-20260905

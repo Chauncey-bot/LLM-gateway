@@ -18,7 +18,7 @@ test("one day and 30 day cumulative plans use total quota, never a daily cap or 
     const sku = catalog.subscriptions.find(s => s.code === code);
     assert.equal(sku.quota_mode, "cumulative");
     assert.equal(sku.topup_balance_amount, undefined);
-    assert.deepEqual(nativeGroupQuota(sku), {daily_limit_usd: 0, weekly_limit_usd: 0, monthly_limit_usd: sku.total_quota_usd});
+    assert.deepEqual(nativeGroupQuota(sku), {daily_limit_usd: 0, weekly_limit_usd: 0, monthly_limit_usd: 0});
     assert.throws(() => assertNativeGroupQuota(sku, {daily_limit_usd: 100}), /not configured/);
     assert.doesNotThrow(() => assertNativeGroupQuota(sku, nativeGroupQuota(sku)));
   }
