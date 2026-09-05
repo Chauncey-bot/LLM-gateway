@@ -9,6 +9,7 @@ COPY server.mjs ./
 COPY payment-order-creation.mjs ./
 COPY subscription-list.mjs ./
 COPY subscription-duration.mjs ./
+COPY subscription-policy.mjs ./
 COPY subscription-fulfillment.mjs ./
 COPY subscription-fulfillment-retry.mjs ./
 COPY traffic-pack-state.mjs ./

@@ -47,7 +47,7 @@ fi
 ARCHIVE_BASENAME="$(basename "$ARCHIVE")"
 
 echo "[1/5] Build image: $IMAGE_NAME"
-docker build -t "$IMAGE_NAME" "$ROOT_DIR"
+docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR/.."
 
 echo "[2/5] Export image archive: $ARCHIVE"
 docker save "$IMAGE_NAME" | gzip > "$ARCHIVE"

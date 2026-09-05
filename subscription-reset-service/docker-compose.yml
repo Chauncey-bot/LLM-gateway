@@ -1,7 +1,9 @@
 services:
   subscription-reset-service:
     image: subscription-reset-service:latest
-    build: .
+    build:
+      context: ..
+      dockerfile: subscription-reset-service/Dockerfile
     restart: unless-stopped
     env_file:
       - .env

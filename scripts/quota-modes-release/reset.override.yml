@@ -1,0 +1,3 @@
+services:
+  subscription-reset-service:
+    image: subscription-reset-service:quota-modes-20260905-2118

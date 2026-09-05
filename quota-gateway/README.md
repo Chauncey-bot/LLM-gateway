@@ -4,7 +4,7 @@
 
 ## 边界
 
-- 只读 Sub2API 的 `api_keys` 以验证 API Key；请求本身仍由 Sub2API 处理。
+- 只读 Sub2API 的 `api_keys`、`user_subscriptions` 和 `usage_logs`；累计套餐按订阅 ID 汇总实际扣费并校验总额度，请求本身仍由 Sub2API 处理。
 - 普通成功请求不读取或写入额度账本；只有明确的原生日额度 429 才读取 `traffic_pack_runtime_states` 并记录 `traffic_pack_key_switches`。
 - 支付服务是套餐基线、购买、过期和手动重置的唯一授权来源。
 - 流量包到期或手动重置后，支付服务会恢复所有已切换 Key 的原分组，并撤销本次运行时订阅。
@@ -13,7 +13,9 @@
 
 ## 运行方式
 
-复制 `.env.example` 为 `.env` 并配置两个数据库连接及 `SUB2API_ADMIN_EMAIL`、`SUB2API_ADMIN_PASSWORD`。`QUOTA_DB_*` 指向 `zhisales_pay`，`SUB2API_DB_*` 指向 Sub2API 数据库；两个数据库账号都应遵循最小权限原则，其中后者仅需 `api_keys` 的 `SELECT` 权限。管理员凭据只用于通过官方 API 切换 Key 分组。
+复制 `.env.example` 为 `.env` 并配置两个数据库连接及 `SUB2API_ADMIN_EMAIL`、`SUB2API_ADMIN_PASSWORD`。`QUOTA_DB_*` 指向 `zhisales_pay`，`SUB2API_DB_*` 指向 Sub2API 数据库；后者需要 `api_keys`、`user_subscriptions`、`usage_logs` 的 `SELECT` 权限。管理员凭据只用于通过官方 API 切换 Key 分组。
+
+累计模式读取 `PLAN_CATALOG_PATH` 指定的商品目录，本地默认使用相邻支付服务的目录；Docker 从仓库根目录构建并内置同一份目录。详见 `docs/plans/2026-09-05-quota-modes.md`。
 
 ```bash
 npm install

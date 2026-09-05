@@ -1,6 +1,8 @@
 services:
   quota-gateway:
-    build: .
+    build:
+      context: ..
+      dockerfile: quota-gateway/Dockerfile
     restart: unless-stopped
     env_file:
       - .env

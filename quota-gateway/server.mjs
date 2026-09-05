@@ -4,6 +4,7 @@ import express from "express";
 import pg from "pg";
 
 import { chinaDay } from "./quota-engine.mjs";
+import { checkCumulativeQuota } from "./cumulative-quota.mjs";
 
 const { Pool } = pg;
 
@@ -373,10 +374,14 @@ function createProxyHandler({ quotaDb, upstreamDb, upstreamBaseUrl = config.upst
     if (!owner) return jsonError(res, 401, "Invalid API key");
 
     try {
+      const cumulative = await checkCumulativeQuota(upstreamDb, owner);
+      if (cumulative && !cumulative.allowed) {
+        return res.status(cumulative.status).json({ error: { code: cumulative.code, message: cumulative.message } });
+      }
       const body = await readRequestBody(req);
       const first = await sendUpstream({ req, res, upstreamBaseUrl, body, captureDailyLimit: true });
       if (!first.captured) return;
-      if (!isDailyLimitExceededResponse(first.statusCode, first.body)) {
+      if (cumulative || !isDailyLimitExceededResponse(first.statusCode, first.body)) {
         res.writeHead(first.statusCode, first.headers);
         res.end(first.body);
         return;

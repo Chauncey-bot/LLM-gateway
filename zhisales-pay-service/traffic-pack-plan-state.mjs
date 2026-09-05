@@ -53,12 +53,16 @@ export function calculatePlanDailyQuotaProfile(subscriptions, now = new Date()) 
   let currentSubscriptionId = null;
   for (const subscription of Array.isArray(subscriptions) ? subscriptions : []) {
     if (!subscription || subscription.status !== "active") continue;
+    const mode = subscription.quota_mode || subscription.quotaMode || subscription.group?.quota_mode;
+    if (mode === "cumulative") continue;
+    const startsAt = subscriptionStart(subscription);
+    if (startsAt && new Date(startsAt).getTime() > now.getTime()) continue;
     const quota = Number(subscription?.group?.daily_limit_usd);
     if (!Number.isFinite(quota) || quota <= 0) continue;
     const expiryValue = subscriptionExpiry(subscription);
     const expiry = expiryValue ? new Date(expiryValue).getTime() : Number.NaN;
     if (Number.isFinite(expiry) && expiry <= now.getTime()) continue;
-    if (!isOneDayTemporarySubscription(subscription)) {
+    if (mode === "daily_fixed" || !isOneDayTemporarySubscription(subscription)) {
       if (quota > currentDailyQuota) {
         currentDailyQuota = quota;
         currentGroupId = Number(subscription.group_id || subscription.group?.id) || null;

@@ -10,6 +10,7 @@ import { buildOrderFulfillmentRequest } from "./subscription-fulfillment.mjs";
 import { fulfillSubscriptionWithRetry } from "./subscription-fulfillment-retry.mjs";
 import { normalizeSubscriptionListResponse } from "./subscription-list.mjs";
 import { resolveSubscriptionValidityDays } from "./subscription-duration.mjs";
+import { resolveQuotaMode, assertNativeGroupQuota } from "./subscription-policy.mjs";
 import { createPersistedTradingOrder } from "./payment-order-creation.mjs";
 import {
   calculateEffectiveDailyQuota,
@@ -110,7 +111,7 @@ function jsonError(res, status, message, extra = {}) {
 }
 
 function normalizeSubscriptionQuotaType(sku) {
-  if (!sku || sku.type !== "subscription") {
+  if (!sku || (sku.type && sku.type !== "subscription")) {
     return "";
   }
   const type = resolveSubscriptionValidityDays(sku) === 1 ? "daily" : "monthly";
@@ -335,6 +336,7 @@ async function readCatalog() {
     subscriptions: subscriptions.map((item) => ({
       ...item,
       type: "subscription",
+      quotaMode: resolveQuotaMode(item),
       resolvedQuotaType: normalizeSubscriptionQuotaType(item),
       resolvedValidityDays: resolveSubscriptionValidityDays(item, { fallbackDays: 30 }),
     })),
@@ -658,6 +660,11 @@ export async function fulfillOrder(order, client) {
         throw error;
       }
     } else if (order.sku_type === "subscription") {
+      const catalog = await readCatalog();
+      const sku = catalog.subscriptions.find((item) => item.code === order.sku_code);
+      if (sku?.quotaMode === "cumulative") {
+        assertNativeGroupQuota(sku, await sub2apiAdminJson(`/api/v1/admin/groups/${order.group_id}`));
+      }
       await fulfillSubscriptionWithRetry(order, {
         listSubscriptions: listUserSubscriptions,
         submitFulfillment: async (fulfillment) => {
@@ -987,9 +994,12 @@ async function getCurrentPlanDailyQuotaProfile(userId, db = pool) {
     [Number(userId)],
   );
   const runtimeGroupIds = new Set(rows.map((row) => Number(row.runtime_group_id)));
+  const catalog = await readCatalog();
+  const modes = new Map(catalog.subscriptions.map(s => [Number(s.group_id), s.quotaMode]));
   return calculatePlanDailyQuotaProfile(subscriptions.filter((subscription) => (
     !runtimeGroupIds.has(Number(subscription?.group_id || subscription?.group?.id))
-  )));
+  )).map(subscription => ({ ...subscription,
+    quota_mode: modes.get(Number(subscription.group_id || subscription.group?.id)) })));
 }
 
 async function getCurrentPlanDailyQuota(userId, { required = true, db = pool } = {}) {
@@ -1733,8 +1743,9 @@ function html(mode) {
           return '<div><div class="section-title">' + title + '</div><div class="grid">' + items.map(function (item) {
             let extra = '';
             if (type === 'subscription') {
-              const quotaType = item.quotaDurationType === 'daily' ? '按日定义额度' : '按月定义额度';
-              extra = '<div class="meta-list"><div>Group ID: ' + item.groupId + '</div><div>额度类型: ' + quotaType + '</div><div>有效期: ' + item.validityDays + ' 天</div></div>';
+              const quotaType = item.quotaMode === 'cumulative' ? '累计额度（有效期内不重置）' : '日固定额度（北京时间每日零点重置）';
+              const amount = item.quotaMode === 'cumulative' ? item.totalQuotaUsd : item.dailyLimitUsd;
+              extra = '<div class="meta-list"><div>额度类型: ' + quotaType + '</div><div>额度: $' + amount + '</div><div>有效期: ' + item.validityDays + ' 天</div></div>';
             } else if (type === 'balance') {
               extra = '<div class="meta-list"><div>到账余额: ' + item.balanceAmount + '</div></div>';
             } else if (type === 'traffic') {
@@ -1971,6 +1982,9 @@ app.get("/pay-api/catalog", async (_req, res) => {
         amountCents: Number(item.amount_cents),
         validityDays: Number(item.resolvedValidityDays || resolveSubscriptionValidityDays(item, { fallbackDays: 30 })),
         quotaDurationType: item.resolvedQuotaType || "monthly",
+        quotaMode: item.quotaMode,
+        dailyLimitUsd: item.quotaMode === "daily_fixed" ? Number(item.daily_limit_usd) : null,
+        totalQuotaUsd: item.quotaMode === "cumulative" ? Number(item.total_quota_usd) : null,
       }))
       .sort((a, b) => a.amountCents - b.amountCents);
     res.json({
@@ -2044,6 +2058,9 @@ app.post("/pay-api/orders", async (req, res) => {
       return jsonError(res, 400, "Invalid or disabled skuCode");
     }
     const isTrafficPack = sku.type === "traffic";
+    if (sku.type === "subscription" && sku.quotaMode === "cumulative") {
+      assertNativeGroupQuota(sku, await sub2apiAdminJson(`/api/v1/admin/groups/${sku.group_id}`));
+    }
     if (isTrafficPack && (await getCurrentPlanDailyQuotaProfile(user.id)).currentDailyQuota <= 0) {
       return jsonError(res, 400, "An active subscription with a finite daily quota is required for traffic packs");
     }

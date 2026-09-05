@@ -3,20 +3,20 @@ import test from "node:test";
 
 import { resolveSubscriptionValidityDays } from "../subscription-duration.mjs";
 
-test("uses daily quota duration type as 1 day", () => {
+test("explicit validity overrides legacy daily type", () => {
   const result = resolveSubscriptionValidityDays(
     { quota_duration_type: "daily", validity_days: 30 },
     { fallbackDays: 30 },
   );
-  assert.equal(result, 1);
+  assert.equal(result, 30);
 });
 
-test("uses monthly quota duration type as 30 days", () => {
+test("explicit validity overrides legacy monthly type", () => {
   const result = resolveSubscriptionValidityDays(
     { quota_duration_type: "monthly", validity_days: 1 },
     { fallbackDays: 30 },
   );
-  assert.equal(result, 30);
+  assert.equal(result, 1);
 });
 
 test("falls back to validity_days when no duration type is configured", () => {

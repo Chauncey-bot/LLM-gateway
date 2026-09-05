@@ -143,7 +143,11 @@ test("daily reset job finds due multi-day subscriptions and uses the upstream re
   assert.equal(calls[2].params[0], "Asia/Shanghai");
   assert.equal(calls[2].params[1], 50);
   assert.match(calls[2].sql, /daily_window_start < today\.window_start/);
-  assert.match(calls[2].sql, /expires_at > subscription\.starts_at \+ INTERVAL '24 hours'/);
+  assert.match(calls[2].sql, /subscription.group_id = ANY\(\$3::bigint\[\]\)/);
+  assert.ok(calls[2].params[2].includes(16));
+  assert.ok(!calls[2].params[2].includes(24));
+  assert.ok(!calls[2].params[2].includes(25));
+  assert.ok(!calls[2].params[2].includes(26));
 });
 
 test("daily reset job skips a concurrent runner without updating subscriptions", async () => {

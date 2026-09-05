@@ -23,6 +23,9 @@ export function resolveSubscriptionDurationTypeFromSku(sku) {
 
 export function resolveSubscriptionValidityDays(sku, { fallbackDays = null } = {}) {
   const rawSku = sku || {};
+  // Duration is independent of the quota mode. Legacy type is only a fallback.
+  const configured = Number(rawSku.validity_days ?? rawSku.validityDays);
+  if (Number.isInteger(configured) && configured > 0) return configured;
   const type = resolveSubscriptionDurationTypeFromSku(rawSku);
   if (type === DAILY_QUOTA_TYPE) {
     return DEFAULT_DAILY_DAYS;
@@ -31,14 +34,8 @@ export function resolveSubscriptionValidityDays(sku, { fallbackDays = null } = {
     return DEFAULT_MONTHLY_DAYS;
   }
 
-  const configured = Number(rawSku.validity_days);
-  if (Number.isFinite(configured) && configured > 0) {
-    return configured;
-  }
-
   if (Number.isFinite(fallbackDays) && fallbackDays > 0) {
     return fallbackDays;
   }
   return DEFAULT_MONTHLY_DAYS;
 }
-

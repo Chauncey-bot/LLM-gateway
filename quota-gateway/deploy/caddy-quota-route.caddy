@@ -1,6 +1,7 @@
 # Put this block before both the /responses/compact handler and the generic
 # Sub2API API matcher. The compatibility gateway proxies the request to the
-# unmodified upstream without creating quota holds or enforcing a local cap.
+# unmodified upstream without creating quota holds. Cumulative plans have a
+# lifetime cap enforced by this gateway; daily limits stay with Sub2API.
 @quota_api path /v1/* /responses* /models* /api/openai/* /api/anthropic/*
 handle @quota_api {
   reverse_proxy 127.0.0.1:18193

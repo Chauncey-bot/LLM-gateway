@@ -1,6 +1,7 @@
 import express from "express";
 import pg from "pg";
 import { fileURLToPath } from "node:url";
+import { dailyFixedGroupIds, assertDailyFixedReset } from "./plan-policy.mjs";
 
 const { Pool } = pg;
 const MINIMUM_REMAINING_HOURS = 24;
@@ -72,11 +73,11 @@ async function getDailyWindowStart(client = pool) {
 }
 
 /**
- * Restores every due multi-day subscription to its plan's daily baseline.
+ * Restores every due daily-fixed subscription to its plan's daily baseline.
  *
  * The upstream gateway only advances subscription windows lazily when a user
  * makes a request. This job makes the business rule explicit: every active
- * multi-day subscription starts a new daily window at China midnight, whether
+ * daily-fixed subscription starts a new daily window at China midnight, whether
  * or not the user sends a request after midnight. The actual reset goes
  * through the upstream admin API so its subscription caches are invalidated.
  */
@@ -109,16 +110,14 @@ async function resetDueDailySubscriptionQuotas({
         WHERE subscription.deleted_at IS NULL
           AND subscription.status = 'active'
           AND subscription.expires_at > NOW()
-          AND subscription.daily_window_start IS NOT NULL
-          AND subscription.daily_window_start < today.window_start
-          -- One-day temporary subscriptions are one-time daily quotas. They
-          -- expire instead of receiving another daily allowance.
-          AND subscription.expires_at > subscription.starts_at + INTERVAL '24 hours'
+          AND subscription.starts_at <= NOW()
+          AND (subscription.daily_window_start IS NULL OR subscription.daily_window_start < today.window_start)
+          AND subscription.group_id = ANY($3::bigint[])
         ORDER BY subscription.daily_window_start ASC, subscription.id ASC
         LIMIT $2
         FOR UPDATE OF subscription SKIP LOCKED
       `,
-      [config.dailyResetTimeZone, batchSize],
+      [config.dailyResetTimeZone, batchSize, dailyFixedGroupIds],
     );
     await client.query("COMMIT");
     subscriptions = result.rows;
@@ -426,7 +425,7 @@ async function resetQuotaAndShortenSubscription(subscriptionId, userId, resetReq
   try {
     await client.query("BEGIN");
     const locked = await client.query(
-      `SELECT id, user_id, status, expires_at
+      `SELECT id, user_id, group_id, status, expires_at
        FROM user_subscriptions
        WHERE id = $1 AND deleted_at IS NULL
        FOR UPDATE`,
@@ -441,6 +440,11 @@ async function resetQuotaAndShortenSubscription(subscriptionId, userId, resetReq
     }
     if (subscription.status !== "active") {
       throw new ServiceError(409, "Only active subscriptions can be reset");
+    }
+    try {
+      assertDailyFixedReset(subscription.group_id, resetRequest);
+    } catch (error) {
+      throw new ServiceError(409, error.message);
     }
     if (!hasMinimumRemainingHours(subscription.expires_at?.toISOString?.() || String(subscription.expires_at))) {
       throw new ServiceError(409, `Subscription must remain active for at least ${config.minimumRemainingHours} hours`);

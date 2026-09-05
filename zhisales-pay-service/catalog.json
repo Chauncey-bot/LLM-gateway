@@ -8,29 +8,32 @@
       "amount_cents": 20000,
       "group_id": 10,
       "validity_days": 30,
-      "quota_duration_type": "monthly"
+      "quota_mode": "daily_fixed",
+      "daily_limit_usd": 80
     },
     {
       "code": "coding-plan-daily-100",
       "enabled": false,
       "title": "OpenAI 100 Daily Temp Top-up",
-      "description": "10 RMB temporary refill for one day, 100 USD daily limit.",
+      "description": "10 RMB, 100 USD total quota, valid for 1 day(s). No daily reset.",
       "amount_cents": 1000,
       "group_id": 23,
       "validity_days": 1,
-      "quota_duration_type": "daily",
-      "topup_balance_amount": 100
+      "quota_mode": "cumulative",
+      "total_quota_usd": 100,
+      "daily_limit_usd": 0
     },
     {
       "code": "coding-plan-daily-100-v2",
       "enabled": true,
-      "title": "OpenAI 100 Daily Temp Top-up (v2)",
-      "description": "10 RMB temporary refill for one day, 100 USD daily limit.",
+      "title": "OpenAI 100 Daily Plan",
+      "description": "10 RMB, 100 USD total quota, valid for 1 day(s). No daily reset.",
       "amount_cents": 1000,
       "group_id": 24,
       "validity_days": 1,
-      "quota_duration_type": "daily",
-      "topup_balance_amount": 100
+      "quota_mode": "cumulative",
+      "total_quota_usd": 100,
+      "daily_limit_usd": 0
     },
     {
       "code": "coding-plan-daily-200",
@@ -40,7 +43,8 @@
       "amount_cents": 50000,
       "group_id": 5,
       "validity_days": 30,
-      "quota_duration_type": "monthly"
+      "quota_mode": "daily_fixed",
+      "daily_limit_usd": 200
     },
     {
       "code": "coding-plan-daily-1-test",
@@ -50,7 +54,8 @@
       "amount_cents": 99,
       "group_id": 14,
       "validity_days": 30,
-      "quota_duration_type": "monthly"
+      "quota_mode": "daily_fixed",
+      "daily_limit_usd": 1
     },
     {
       "code": "coding-plan-daily-10",
@@ -60,7 +65,8 @@
       "amount_cents": 2000,
       "group_id": 15,
       "validity_days": 30,
-      "quota_duration_type": "monthly"
+      "quota_mode": "daily_fixed",
+      "daily_limit_usd": 10
     },
     {
       "code": "coding-plan-daily-800",
@@ -70,7 +76,8 @@
       "amount_cents": 0,
       "group_id": 12,
       "validity_days": 30,
-      "quota_duration_type": "monthly"
+      "quota_mode": "daily_fixed",
+      "daily_limit_usd": 800
     },
     {
       "code": "coding-plan-daily-400",
@@ -80,7 +87,8 @@
       "amount_cents": 100000,
       "group_id": 16,
       "validity_days": 30,
-      "quota_duration_type": "monthly"
+      "quota_mode": "daily_fixed",
+      "daily_limit_usd": 400
     },
     {
       "code": "coding-plan-daily-1600",
@@ -90,7 +98,8 @@
       "amount_cents": 400000,
       "group_id": 18,
       "validity_days": 30,
-      "quota_duration_type": "monthly"
+      "quota_mode": "daily_fixed",
+      "daily_limit_usd": 1600
     },
     {
       "code": "coding-plan-daily-300",
@@ -100,7 +109,8 @@
       "amount_cents": 75000,
       "group_id": 21,
       "validity_days": 30,
-      "quota_duration_type": "monthly"
+      "quota_mode": "daily_fixed",
+      "daily_limit_usd": 300
     },
     {
       "code": "coding-plan-daily-2800",
@@ -110,31 +120,32 @@
       "amount_cents": 700000,
       "group_id": 22,
       "validity_days": 30,
-      "quota_duration_type": "monthly"
+      "quota_mode": "daily_fixed",
+      "daily_limit_usd": 2800
     },
     {
       "code": "coding-plan-monthly-84000",
       "enabled": false,
       "title": "Coding Plan 84000 Monthly",
-      "description": "7000 RMB per month, 84000 USD monthly limit.",
+      "description": "7000 RMB, 84000 USD total quota, valid for 30 day(s). No daily reset.",
       "amount_cents": 700000,
       "group_id": 25,
       "validity_days": 30,
-      "quota_duration_type": "monthly",
       "daily_limit_usd": 0,
-      "monthly_limit_usd": 84000
+      "quota_mode": "cumulative",
+      "total_quota_usd": 84000
     },
     {
       "code": "coding-plan-monthly-12000",
       "enabled": false,
       "title": "Coding Plan 12000 Monthly",
-      "description": "1200 RMB per month, 12000 USD monthly limit.",
+      "description": "1200 RMB, 12000 USD total quota, valid for 30 day(s). No daily reset.",
       "amount_cents": 120000,
       "group_id": 26,
       "validity_days": 30,
-      "quota_duration_type": "monthly",
       "daily_limit_usd": 0,
-      "monthly_limit_usd": 12000
+      "quota_mode": "cumulative",
+      "total_quota_usd": 12000
     },
     {
       "code": "claude-daily-80",
@@ -144,7 +155,8 @@
       "amount_cents": 0,
       "group_id": 11,
       "validity_days": 30,
-      "quota_duration_type": "monthly"
+      "quota_mode": "daily_fixed",
+      "daily_limit_usd": 80
     },
     {
       "code": "claude-coding-200",
@@ -154,13 +166,14 @@
       "amount_cents": 0,
       "group_id": 9,
       "validity_days": 30,
-      "quota_duration_type": "monthly"
+      "quota_mode": "daily_fixed",
+      "daily_limit_usd": 200
     }
   ],
   "traffic_packs": [
     {
       "code": "openai-daily-traffic-100",
-      "enabled": true,
+      "enabled": false,
       "title": "OpenAI Daily Traffic Pack",
       "description": "¥10 for +$100 daily quota today, reset to the original quota tomorrow.",
       "amount_cents": 1000,
