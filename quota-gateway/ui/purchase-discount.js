@@ -34,7 +34,8 @@
 
   function findCard(code) {
     return [...document.querySelectorAll('article.card-hover, article')]
-      .find(card => card.textContent.includes(code));
+      .find(card => [...card.querySelectorAll('*')]
+        .some(element => !element.children.length && element.textContent.trim() === code));
   }
 
   function findPriceElement(card) {
