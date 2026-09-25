@@ -928,6 +928,14 @@ async function getUserDailyQuotaExtension(client, userId) {
 }
 
 async function getUserDiscountPercent(client, userId) {
+  await client.query(
+    `
+    INSERT INTO user_extensions (user_id, discount_percent)
+    VALUES ($1, 0)
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [Number(userId)],
+  );
   const { rows } = await client.query(
     `
     SELECT discount_percent

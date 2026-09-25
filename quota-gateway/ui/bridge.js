@@ -82,18 +82,36 @@
   redraw();
 })().catch(()=>{ /* Upstream rendering remains available if extension cannot load. */ });
 
-// Load the admin users extension only on the protected users page.
-if (location.pathname.endsWith('/admin/users')) {
-  const script = document.createElement('script');
-  script.src = '/quota-ui/user-discount.js';
-  script.defer = true;
-  document.head.appendChild(script);
-}
+// The upstream app is an SPA, so route changes do not reload this bridge script.
+// Load each first-party extension when its route becomes active, including
+// navigation from the sidebar or router history.
+(function loadRouteExtensions() {
+  const extensions = [
+    { suffix: '/admin/users', id: 'quota-user-discount', src: '/quota-ui/user-discount.js' },
+    { suffix: '/purchase', id: 'quota-purchase-discount', src: '/quota-ui/purchase-discount.js' },
+  ];
 
-// Load the purchase price extension only on the native purchase page.
-if (location.pathname.endsWith('/purchase')) {
-  const script = document.createElement('script');
-  script.src = '/quota-ui/purchase-discount.js';
-  script.defer = true;
-  document.head.appendChild(script);
-}
+  function loadActiveExtensions() {
+    for (const extension of extensions) {
+      if (!location.pathname.endsWith(extension.suffix)) continue;
+      if (document.querySelector(`script[data-quota-extension="${extension.id}"]`)) continue;
+      const script = document.createElement('script');
+      script.dataset.quotaExtension = extension.id;
+      script.src = extension.src;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+  }
+
+  const notifyRouteChange = () => queueMicrotask(loadActiveExtensions);
+  for (const method of ['pushState', 'replaceState']) {
+    const original = history[method];
+    history[method] = function (...args) {
+      const result = original.apply(this, args);
+      notifyRouteChange();
+      return result;
+    };
+  }
+  window.addEventListener('popstate', notifyRouteChange);
+  loadActiveExtensions();
+})();

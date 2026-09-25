@@ -12,6 +12,23 @@ test('entry injection is idempotent and preserves the upstream bundle',()=>{
   assert.ok(patched.includes('src="/quota-ui/bridge.js"'));
 });
 
+test('route extensions load after SPA navigation', async t => {
+  const dom = new JSDOM('<html><head></head><body></body></html>', {
+    runScripts: 'outside-only',
+    url: 'https://example.test/dashboard',
+  });
+  t.after(() => { dom.window.dispatchEvent(new dom.window.Event('pagehide')); dom.window.close(); });
+  dom.window.fetch = async () => ({ ok: true, json: async () => ({ groups: [] }) });
+  dom.window.eval(fs.readFileSync(new URL('../ui/bridge.js', import.meta.url), 'utf8'));
+  assert.equal(dom.window.document.querySelector('[data-quota-extension="quota-user-discount"]'), null);
+  dom.window.history.pushState({}, '', '/admin/users');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(
+    dom.window.document.querySelector('[data-quota-extension="quota-user-discount"]')?.getAttribute('src'),
+    '/quota-ui/user-discount.js',
+  );
+});
+
 test('mixed subscription grid keeps daily reset visible and expiry styling matches reset hint', async t=>{
   const dom=new JSDOM(`<div class="grid"><div class="card card-hover" id="total"><h3>coding-plan-monthly-12000</h3><span>剩余30天 (2026/10/05 22:50:23)</span><span>每月</span><div><button>重置今日额度</button></div></div>
     <div class="card card-hover" id="daily"><h3>coding-plan-daily-400</h3><span>剩余328天 (2027/07/30 13:06:57)</span><p class="text-xs text-gray-500 dark:text-dark-400">订阅额度将在0h 55m后重置</p><div><button>重置今日额度</button></div></div></div>`,{runScripts:'outside-only'});
