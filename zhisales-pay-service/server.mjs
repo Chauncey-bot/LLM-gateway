@@ -407,6 +407,8 @@ async function initDb() {
       validity_days INTEGER,
       balance_amount NUMERIC(20,8),
       amount_cents INTEGER NOT NULL,
+      original_amount_cents INTEGER,
+      discount_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
       currency VARCHAR(16) NOT NULL DEFAULT 'CNY',
       platform_order_no TEXT,
       trade_status VARCHAR(32) NOT NULL DEFAULT 'created',
@@ -438,11 +440,15 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS user_extensions (
       user_id BIGINT PRIMARY KEY,
       quota_daily_limit NUMERIC(20,8) NOT NULL DEFAULT 0,
+      discount_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+  await pool.query(`ALTER TABLE user_extensions ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5,2) NOT NULL DEFAULT 0;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS user_username TEXT;`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS original_amount_cents INTEGER;`);
+  await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5,2) NOT NULL DEFAULT 0;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS raw_notify_response JSONB;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS notify_received_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS traffic_pack_bonus_usd NUMERIC(20,8);`);
@@ -919,6 +925,35 @@ async function getUserDailyQuotaExtension(client, userId) {
     [Number(userId)],
   );
   return rows.length ? parseDecimalNumber(rows[0].quota_daily_limit) ?? 0 : 0;
+}
+
+async function getUserDiscountPercent(client, userId) {
+  const { rows } = await client.query(
+    `
+    SELECT discount_percent
+    FROM user_extensions
+    WHERE user_id = $1
+    `,
+    [Number(userId)],
+  );
+  return rows.length ? parseDecimalNumber(rows[0].discount_percent) ?? 0 : 0;
+}
+
+async function upsertUserDiscountPercent(client, userId, discountPercent) {
+  await client.query(
+    `
+    INSERT INTO user_extensions (user_id, discount_percent)
+    VALUES ($1, $2)
+    ON CONFLICT (user_id) DO UPDATE
+    SET discount_percent = EXCLUDED.discount_percent,
+        updated_at = NOW()
+    `,
+    [Number(userId), discountPercent],
+  );
+}
+
+function applyDiscountToAmountCents(amountCents, discountPercent) {
+  return Math.max(0, Math.round(Number(amountCents) * (1 - Number(discountPercent) / 100)));
 }
 
 async function upsertUserDailyQuotaExtension(client, userId, quotaDailyLimit) {
@@ -1926,6 +1961,71 @@ async function createTradingOrder(order, sku) {
   };
 }
 
+function adminUserDiscountHtml() {
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>用户折扣管理</title>
+    <style>
+      :root { color-scheme: light; --bg:#f5f7fb; --card:#fff; --text:#111827; --muted:#6b7280; --line:#e5e7eb; --primary:#2563eb; --ok:#059669; --err:#dc2626; }
+      body { margin:0; background:var(--bg); color:var(--text); font:14px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+      .wrap { max-width:1100px; margin:0 auto; padding:28px 20px 48px; }
+      h1 { margin:0; font-size:28px; } .sub { margin:8px 0 22px; color:var(--muted); }
+      .toolbar { display:flex; gap:10px; margin-bottom:14px; } input { min-width:0; border:1px solid var(--line); border-radius:10px; padding:10px 12px; font:inherit; }
+      .search { flex:1; } button { border:0; border-radius:10px; padding:10px 14px; font:inherit; font-weight:650; cursor:pointer; }
+      .primary { background:var(--primary); color:#fff; } .secondary { background:var(--card); border:1px solid var(--line); color:var(--text); }
+      .status { min-height:20px; margin:10px 0; color:var(--muted); } .status.ok { color:var(--ok); } .status.err { color:var(--err); }
+      .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:14px; background:var(--card); }
+      table { width:100%; border-collapse:collapse; min-width:700px; } th,td { padding:13px 15px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; } th { color:var(--muted); font-size:12px; font-weight:700; } tr:last-child td { border-bottom:0; }
+      .muted { color:var(--muted); } .discount { width:110px; } .save { padding:8px 12px; } .empty { padding:32px; text-align:center; color:var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <h1>用户折扣管理</h1>
+      <div class="sub">折扣仅管理员可查看和设置，范围为 0–100%。保存后会应用于该用户新创建的支付订单。</div>
+      <div class="toolbar"><input id="search" class="search" placeholder="搜索邮箱或用户名" /><button id="reload" class="secondary">刷新</button></div>
+      <div id="status" class="status"></div>
+      <div class="table-wrap"><table><thead><tr><th>用户</th><th>用户名</th><th>用户 ID</th><th>折扣</th><th>操作</th></tr></thead><tbody id="rows"></tbody></table></div>
+    </main>
+    <script>
+      (function () {
+        const qs = new URLSearchParams(location.search);
+        const token = qs.get('token') || sessionStorage.getItem('pay_admin_token') || localStorage.getItem('auth_token') || '';
+        if (qs.get('token')) { sessionStorage.setItem('pay_admin_token', qs.get('token')); const clean = new URL(location.href); clean.searchParams.delete('token'); history.replaceState({}, '', clean); }
+        const rows = document.getElementById('rows'); const status = document.getElementById('status'); const search = document.getElementById('search');
+        const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[char]);
+        async function api(path, options) {
+          const headers = Object.assign({ 'Content-Type':'application/json' }, options && options.headers || {});
+          if (token) headers.Authorization = 'Bearer ' + token;
+          const response = await fetch(path, Object.assign({}, options || {}, { headers })); const text = await response.text(); let data = {};
+          try { data = text ? JSON.parse(text) : {}; } catch (_) {}
+          if (!response.ok) throw new Error(data.error || text || ('HTTP ' + response.status)); return data;
+        }
+        function setStatus(message, kind) { status.textContent = message || ''; status.className = 'status ' + (kind || ''); }
+        async function load() {
+          setStatus('正在加载...'); rows.innerHTML = '';
+          try {
+            const params = new URLSearchParams({ page:'1', page_size:'200' }); if (search.value.trim()) params.set('search', search.value.trim());
+            const data = await api('/pay-api/admin/users?' + params.toString()); const users = data.users || [];
+            if (!users.length) { rows.innerHTML = '<tr><td colspan="5" class="empty">没有匹配的用户</td></tr>'; setStatus(''); return; }
+            rows.innerHTML = users.map((user) => '<tr data-id="' + user.id + '">' +
+              '<td>' + escapeHtml(user.email) + '</td><td class="muted">' + escapeHtml(user.username || '-') + '</td><td class="muted">' + escapeHtml(user.id) + '</td>' +
+              '<td><input class="discount" type="number" min="0" max="100" step="0.1" value="' + escapeHtml(user.discountPercent ?? 0) + '" /> %</td>' +
+              '<td><button class="primary save" data-save="' + user.id + '">保存</button></td></tr>').join('');
+            setStatus('共 ' + users.length + ' 个用户');
+          } catch (error) { rows.innerHTML = '<tr><td colspan="5" class="empty">加载失败</td></tr>'; setStatus(error.message || '加载失败', 'err'); }
+        }
+        rows.addEventListener('click', async (event) => { const button = event.target.closest('[data-save]'); if (!button) return; const row = button.closest('tr'); const input = row.querySelector('.discount'); const value = Number(input.value); if (!Number.isFinite(value) || value < 0 || value > 100) { setStatus('折扣必须在 0–100 之间', 'err'); return; } button.disabled = true; try { await api('/pay-api/admin/users/' + button.dataset.save + '/discount', { method:'PUT', body:JSON.stringify({ discountPercent:value }) }); setStatus('保存成功', 'ok'); } catch (error) { setStatus(error.message || '保存失败', 'err'); } finally { button.disabled = false; } });
+        document.getElementById('reload').addEventListener('click', load); search.addEventListener('keydown', (event) => { if (event.key === 'Enter') load(); }); load();
+      })();
+    </script>
+  </body>
+</html>`;
+}
+
 app.disable("x-powered-by");
 
 app.get("/health", async (_req, res) => {
@@ -1951,6 +2051,11 @@ app.get("/purchase/return", (_req, res) => {
   res.type("html").send(html("return"));
 });
 
+app.get("/admin/user-discounts", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.type("html").send(adminUserDiscountHtml());
+});
+
 app.get("/pay-api/session", async (req, res) => {
   try {
     const token = readBearerToken(req);
@@ -1963,6 +2068,7 @@ app.get("/pay-api/session", async (req, res) => {
         username: user.username || "",
         role: user.role,
       },
+      discountPercent: await getUserDiscountPercent(pool, user.id),
       querySupported: isQueryConfigured(),
     });
   } catch (error) {
@@ -2058,6 +2164,9 @@ app.post("/pay-api/orders", async (req, res) => {
       return jsonError(res, 400, "Invalid or disabled skuCode");
     }
     const isTrafficPack = sku.type === "traffic";
+    const discountPercent = await getUserDiscountPercent(client, user.id);
+    const originalAmountCents = Number(sku.amount_cents);
+    const amountCents = applyDiscountToAmountCents(originalAmountCents, discountPercent);
     if (sku.type === "subscription" && sku.quotaMode === "cumulative") {
       assertNativeGroupQuota(sku, await sub2apiAdminJson(`/api/v1/admin/groups/${sku.group_id}`));
     }
@@ -2080,7 +2189,9 @@ app.post("/pay-api/orders", async (req, res) => {
         sku.type === "balance" || sku.type === "traffic"
           ? parseOptionalNumber(sku.balance_amount ?? sku.daily_quota_bonus_usd)
           : parseOptionalNumber(sku.topup_balance_amount),
-      amountCents: Number(sku.amount_cents),
+      amountCents,
+      originalAmountCents,
+      discountPercent,
       clientIp: req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() || req.socket.remoteAddress || "",
     };
     const { order, trading } = await createPersistedTradingOrder({
@@ -2091,9 +2202,10 @@ app.post("/pay-api/orders", async (req, res) => {
           `
           INSERT INTO payment_orders (
             merchant_order_id, user_id, user_email, user_username, sku_type, sku_code, group_id,
-            validity_days, balance_amount, amount_cents, trade_status, fulfillment_status
+            validity_days, balance_amount, amount_cents, original_amount_cents, discount_percent,
+            trade_status, fulfillment_status
           ) VALUES (
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'created','pending'
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'created','pending'
           )
           `,
           [
@@ -2107,6 +2219,8 @@ app.post("/pay-api/orders", async (req, res) => {
             draft.validityDays,
             draft.balanceAmount,
             draft.amountCents,
+            draft.originalAmountCents,
+            draft.discountPercent,
           ],
         );
       },
@@ -2264,6 +2378,69 @@ app.put("/pay-api/admin/users/:userId/daily-quota", async (req, res) => {
     res.json({ userId, quotaDailyLimit });
   } catch (error) {
     const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed to update daily quota";
+    jsonError(res, message === "Forbidden" ? 403 : 500, message);
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/pay-api/admin/users", async (req, res) => {
+  try {
+    await requireCurrentAdmin(req);
+    const page = parsePositiveInt(req.query.page, 1);
+    const pageSize = parseListLimit(req.query.page_size, 100, 200);
+    const search = String(req.query.search || "").trim();
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (search) query.set("search", search);
+    const data = await sub2apiAdminJson(`/api/v1/admin/users?${query.toString()}`);
+    const sourceUsers = Array.isArray(data?.items) ? data.items : Array.isArray(data?.users) ? data.users : [];
+    const users = await Promise.all(sourceUsers.map(async (user) => ({
+      id: Number(user.id),
+      email: user.email || "",
+      username: user.username || "",
+      role: user.role || "user",
+      status: user.status || "",
+      discountPercent: await getUserDiscountPercent(pool, user.id),
+    })));
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ users, total: Number(data?.total || users.length), page, pageSize });
+  } catch (error) {
+    const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed to list users";
+    jsonError(res, message === "Forbidden" ? 403 : 500, message);
+  }
+});
+
+app.get("/pay-api/admin/users/:userId/discount", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await requireCurrentAdmin(req);
+    const userId = parsePositiveInt(req.params.userId, 0);
+    if (!userId) {
+      return jsonError(res, 400, "Invalid user id");
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ userId, discountPercent: await getUserDiscountPercent(client, userId) });
+  } catch (error) {
+    const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed to fetch user discount";
+    jsonError(res, message === "Forbidden" ? 403 : 500, message);
+  } finally {
+    client.release();
+  }
+});
+
+app.put("/pay-api/admin/users/:userId/discount", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await requireCurrentAdmin(req);
+    const userId = parsePositiveInt(req.params.userId, 0);
+    const discountPercent = parseDecimalNumber(req.body?.discountPercent);
+    if (!userId || discountPercent === null || discountPercent < 0 || discountPercent > 100) {
+      return jsonError(res, 400, "userId and a discountPercent between 0 and 100 are required");
+    }
+    await upsertUserDiscountPercent(client, userId, discountPercent);
+    res.json({ userId, discountPercent });
+  } catch (error) {
+    const message = error instanceof Error && error.message === "Forbidden" ? "Forbidden" : error instanceof Error ? error.message : "Failed to update user discount";
     jsonError(res, message === "Forbidden" ? 403 : 500, message);
   } finally {
     client.release();

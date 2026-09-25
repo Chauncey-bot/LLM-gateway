@@ -81,3 +81,19 @@
   });
   redraw();
 })().catch(()=>{ /* Upstream rendering remains available if extension cannot load. */ });
+
+// Load the admin users extension only on the protected users page.
+if (location.pathname.endsWith('/admin/users')) {
+  const script = document.createElement('script');
+  script.src = '/quota-ui/user-discount.js';
+  script.defer = true;
+  document.head.appendChild(script);
+}
+
+// Load the purchase price extension only on the native purchase page.
+if (location.pathname.endsWith('/purchase')) {
+  const script = document.createElement('script');
+  script.src = '/quota-ui/purchase-discount.js';
+  script.defer = true;
+  document.head.appendChild(script);
+}

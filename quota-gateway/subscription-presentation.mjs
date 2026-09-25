@@ -41,6 +41,12 @@ export function installSubscriptionPresentation(app, {upstreamDb, quotaDb, upstr
   app.get('/quota-ui/bridge.js', (_req,res) => {
     res.set('Cache-Control','no-cache').type('application/javascript').send(fs.readFileSync(new URL('./ui/bridge.js',import.meta.url),'utf8'));
   });
+  app.get('/quota-ui/user-discount.js', (_req,res) => {
+    res.set('Cache-Control','no-cache').type('application/javascript').send(fs.readFileSync(new URL('./ui/user-discount.js',import.meta.url),'utf8'));
+  });
+  app.get('/quota-ui/purchase-discount.js', (_req,res) => {
+    res.set('Cache-Control','no-cache').type('application/javascript').send(fs.readFileSync(new URL('./ui/purchase-discount.js',import.meta.url),'utf8'));
+  });
   const routes = [/^\/api\/v1\/(?:admin\/)?subscriptions(?:\/active|\/\d+)?$/,
     /^\/api\/v1\/admin\/users\/\d+\/subscriptions$/];
   app.get(routes, async (req,res) => {
