@@ -17,6 +17,10 @@ const config = {
   port: Number(process.env.PORT || 3000),
   publicBaseUrl: (process.env.REWARDS_PUBLIC_BASE_URL || "https://www.zhisales.com").replace(/\/+$/, ""),
   registerPath: process.env.REWARDS_REGISTER_PATH || "/register",
+  agentSiteBaseDomain: String(process.env.AGENT_SITE_BASE_DOMAIN || "zhisales.com")
+    .trim()
+    .toLowerCase()
+    .replace(/^\.+|\.+$/g, ""),
   sourceCatalogPath: process.env.REWARDS_SOURCE_CATALOG_PATH || path.join(__dirname, "catalog.json"),
   db: {
     host: process.env.DB_HOST || "sub2api-postgres",
@@ -82,6 +86,39 @@ function parseInteger(value) {
   const num = Number(value);
   if (!Number.isInteger(num)) return null;
   return num;
+}
+
+function normalizeSubdomain(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+  if (!normalized || normalized.length > 63) return "";
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(normalized)) return "";
+  return normalized;
+}
+
+function isReservedSubdomain(subdomain) {
+  return new Set(["www", "api", "admin", "app", "auth", "static", "mail"]).has(subdomain);
+}
+
+function requestHostname(req) {
+  const host = String(req.hostname || req.headers.host || "").trim().toLowerCase();
+  return host.replace(/\.$/, "");
+}
+
+function subdomainFromHostname(hostname) {
+  const host = String(hostname || "").trim().toLowerCase().replace(/\.$/, "");
+  const baseDomain = config.agentSiteBaseDomain;
+  if (!host || !baseDomain || host === baseDomain || host === `www.${baseDomain}`) {
+    return "";
+  }
+  const suffix = `.${baseDomain}`;
+  if (!host.endsWith(suffix)) return "";
+  const label = host.slice(0, -suffix.length);
+  if (label.includes(".")) return "";
+  return normalizeSubdomain(label);
+}
+
+function subdomainFromRequest(req) {
+  return subdomainFromHostname(requestHostname(req));
 }
 
 function parseIdList(value) {
@@ -230,9 +267,35 @@ function pickMatchingSubscription(subscriptions, groupId) {
   return subscriptions.find((item) => Number(item.group_id) === Number(groupId)) || null;
 }
 
+async function autoBindReferralFromSite(req, user) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const site = await resolveAgentSubdomainFromRequest(client, req);
+    if (site && site.userId !== Number(user.id)) {
+      await bindReferralRelationship(client, {
+        referredUserId: user.id,
+        referrerUserId: site.userId,
+        sourceCode: site.referralCode,
+      });
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    try { await client.query("ROLLBACK"); } catch {}
+    // Binding is best-effort here. An existing relationship, including one
+    // deliberately corrected by an administrator, must not break auth APIs.
+    if (!String(error?.message || "").includes("relationship already exists")) {
+      console.warn("[referral-rewards-service] auto-bind skipped:", error instanceof Error ? error.message : error);
+    }
+  } finally {
+    client.release();
+  }
+}
+
 async function ensureAuthenticatedUser(req, res) {
   try {
     const user = await resolveCurrentUser(readBearerToken(req));
+    await autoBindReferralFromSite(req, user);
     return user;
   } catch (error) {
     jsonError(res, 401, error instanceof Error ? error.message : "Unauthorized");
@@ -385,16 +448,53 @@ async function resolveReferrerByCode(client, referralCode) {
   return result.rows[0] || null;
 }
 
-async function bindReferralRelationship(client, { referredUserId, referralCode }) {
-  const normalizedCode = String(referralCode || "").trim().toUpperCase();
-  if (!normalizedCode) {
-    throw new Error("referral_code is required");
+async function resolveAgentSubdomain(client, subdomain) {
+  const normalizedSubdomain = normalizeSubdomain(subdomain);
+  if (!normalizedSubdomain) return null;
+  const result = await client.query(
+    `
+    SELECT a.subdomain, a.user_id, a.status, p.referral_code
+    FROM agent_subdomains a
+    LEFT JOIN referral_profiles p ON p.user_id = a.user_id
+    WHERE a.subdomain = $1
+    LIMIT 1
+    `,
+    [normalizedSubdomain],
+  );
+  const row = result.rows[0] || null;
+  if (!row || row.status !== "active") return null;
+  return {
+    subdomain: row.subdomain,
+    userId: Number(row.user_id),
+    referralCode: row.referral_code || "",
+  };
+}
+
+async function resolveAgentSubdomainFromRequest(client, req) {
+  const subdomain = subdomainFromRequest(req);
+  if (!subdomain) return null;
+  return resolveAgentSubdomain(client, subdomain);
+}
+
+async function bindReferralRelationship(client, { referredUserId, referralCode, referrerUserId: requestedReferrerUserId, sourceCode }) {
+  let referrerUserId = parseInteger(requestedReferrerUserId);
+  let normalizedCode = String(sourceCode || referralCode || "").trim().toUpperCase();
+
+  if (referrerUserId == null) {
+    if (!normalizedCode) {
+      throw new Error("referral_code or referrer_user_id is required");
+    }
+    const referrerProfile = await resolveReferrerByCode(client, normalizedCode);
+    if (!referrerProfile) {
+      throw new Error("Referral code not found");
+    }
+    referrerUserId = Number(referrerProfile.user_id);
+    normalizedCode = referrerProfile.referral_code;
+  } else if (!normalizedCode) {
+    const referrerProfile = await ensureReferralProfile(referrerUserId, client);
+    normalizedCode = referrerProfile.referral_code;
   }
-  const referrerProfile = await resolveReferrerByCode(client, normalizedCode);
-  if (!referrerProfile) {
-    throw new Error("Referral code not found");
-  }
-  const referrerUserId = Number(referrerProfile.user_id);
+
   const normalizedReferredUserId = Number(referredUserId);
   if (normalizedReferredUserId === referrerUserId) {
     throw new Error("Self-referral is not allowed");
@@ -616,6 +716,17 @@ async function initDb() {
     );
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_subdomains (
+      subdomain VARCHAR(63) PRIMARY KEY,
+      user_id BIGINT NOT NULL UNIQUE,
+      status VARCHAR(16) NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT agent_subdomains_status_check CHECK (status IN ('active', 'disabled'))
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_agent_subdomains_user ON agent_subdomains(user_id);`);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS referral_relationships (
       id BIGSERIAL PRIMARY KEY,
       referred_user_id BIGINT NOT NULL UNIQUE,
@@ -730,6 +841,26 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+app.get("/api/site/context", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const site = await resolveAgentSubdomainFromRequest(client, req);
+    if (!site) {
+      return jsonError(res, 404, "Agent site not found");
+    }
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({
+      subdomain: site.subdomain,
+      inviter_user_id: site.userId,
+      referral_code: site.referralCode || null,
+    });
+  } catch (error) {
+    return jsonError(res, 500, error instanceof Error ? error.message : "Failed to resolve agent site");
+  } finally {
+    client.release();
+  }
+});
+
 app.get("/api/referral/me", async (req, res) => {
   const user = await ensureAuthenticatedUser(req, res);
   if (!user) return;
@@ -760,12 +891,20 @@ app.get("/api/referral/me", async (req, res) => {
         `SELECT balance, total_earned, total_spent FROM points_accounts WHERE user_id = $1 LIMIT 1`,
         [Number(user.id)],
       );
+      const siteResult = await client.query(
+        `SELECT subdomain FROM agent_subdomains WHERE user_id = $1 AND status = 'active' LIMIT 1`,
+        [Number(user.id)],
+      );
       const account = accountResult.rows[0] || { balance: 0, total_earned: 0, total_spent: 0 };
       const relationship = relationshipResult.rows[0] || null;
+      const agentSiteUrl = siteResult.rows[0]?.subdomain
+        ? `https://${siteResult.rows[0].subdomain}.${config.agentSiteBaseDomain}`
+        : null;
       res.setHeader("Cache-Control", "no-store");
       res.json({
         referral_code: profile.referral_code,
-        invite_url: buildInviteUrl(profile.referral_code),
+        invite_url: agentSiteUrl || buildInviteUrl(profile.referral_code),
+        agent_site_url: agentSiteUrl,
         invited_count: Number(invitedResult.rows[0]?.count || 0),
         rewarded_purchase_count: Number(rewardedResult.rows[0]?.count || 0),
         points_balance: Number(account.balance || 0),
@@ -790,16 +929,20 @@ app.post("/api/referral/bind-registration", async (req, res) => {
   if (!user) return;
 
   const referralCode = String(req.body?.referral_code || "").trim();
-  if (!referralCode) {
-    return jsonError(res, 400, "referral_code is required");
-  }
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const site = await resolveAgentSubdomainFromRequest(client, req);
+    if (!site && !referralCode) {
+      await client.query("ROLLBACK");
+      return jsonError(res, 400, "An active agent subdomain or referral_code is required");
+    }
     const result = await bindReferralRelationship(client, {
       referredUserId: user.id,
-      referralCode,
+      referralCode: site ? "" : referralCode,
+      referrerUserId: site?.userId,
+      sourceCode: site?.referralCode || "",
     });
     await client.query("COMMIT");
     return res.json({ success: true, created: result.created, relationship: result.relationship });
@@ -818,16 +961,26 @@ app.post("/internal/referrals/bind-registration", async (req, res) => {
 
   const referredUserId = parseInteger(req.body?.referred_user_id);
   const referralCode = String(req.body?.referral_code || "").trim();
-  if (referredUserId == null || !referralCode) {
-    return jsonError(res, 400, "referred_user_id and referral_code are required");
+  const requestedSubdomain = String(req.body?.subdomain || "").trim();
+  const requestedHost = String(req.body?.host || "").trim();
+  const requestedHostSubdomain = requestedHost ? subdomainFromHostname(requestedHost.split(":")[0]) : "";
+  const subdomain = requestedSubdomain || requestedHostSubdomain;
+  if (referredUserId == null || (!referralCode && !subdomain)) {
+    return jsonError(res, 400, "referred_user_id and subdomain or referral_code are required");
   }
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const site = subdomain ? await resolveAgentSubdomain(client, subdomain) : null;
+    if (subdomain && !site) {
+      throw new Error("Agent subdomain not found or disabled");
+    }
     const result = await bindReferralRelationship(client, {
       referredUserId,
-      referralCode,
+      referralCode: site ? "" : referralCode,
+      referrerUserId: site?.userId,
+      sourceCode: site?.referralCode || "",
     });
     await client.query("COMMIT");
     return res.json({ success: true, created: result.created, relationship: result.relationship });
@@ -997,6 +1150,123 @@ app.post("/internal/events/order-fulfilled", async (req, res) => {
     res.json(result);
   } catch (error) {
     jsonError(res, 400, error instanceof Error ? error.message : "Failed to process reward event");
+  }
+});
+
+app.get("/admin/agent-subdomains", async (req, res) => {
+  const admin = await ensureAdmin(req, res);
+  if (!admin) return;
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT a.subdomain, a.user_id, a.status, p.referral_code, a.created_at, a.updated_at
+      FROM agent_subdomains a
+      LEFT JOIN referral_profiles p ON p.user_id = a.user_id
+      ORDER BY a.subdomain ASC
+      `,
+    );
+    res.json({
+      items: result.rows.map((row) => ({
+        subdomain: row.subdomain,
+        user_id: Number(row.user_id),
+        status: row.status,
+        referral_code: row.referral_code || null,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      })),
+      actor: admin.email || null,
+    });
+  } catch (error) {
+    jsonError(res, 500, error instanceof Error ? error.message : "Failed to list agent subdomains");
+  }
+});
+
+app.post("/admin/agent-subdomains", async (req, res) => {
+  const admin = await ensureAdmin(req, res);
+  if (!admin) return;
+
+  const userId = parseInteger(req.body?.user_id);
+  if (userId == null || userId <= 0) {
+    return jsonError(res, 400, "positive user_id is required");
+  }
+
+  const requestedSubdomain = normalizeSubdomain(req.body?.subdomain);
+  if (req.body?.subdomain && !requestedSubdomain) {
+    return jsonError(res, 400, "subdomain must contain only lowercase letters, numbers, and hyphens");
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const profile = await ensureReferralProfile(userId, client);
+    const subdomain = requestedSubdomain || normalizeSubdomain(profile.referral_code);
+    if (!subdomain) {
+      throw new Error("Unable to derive a valid subdomain from referral profile");
+    }
+    if (isReservedSubdomain(subdomain)) {
+      throw new Error("This subdomain is reserved");
+    }
+
+    const result = await client.query(
+      `
+      INSERT INTO agent_subdomains (subdomain, user_id, status, created_at, updated_at)
+      VALUES ($1, $2, 'active', NOW(), NOW())
+      ON CONFLICT (user_id)
+      DO UPDATE SET subdomain = EXCLUDED.subdomain,
+                    status = 'active',
+                    updated_at = NOW()
+      RETURNING subdomain, user_id, status, created_at, updated_at
+      `,
+      [subdomain, userId],
+    );
+    await client.query("COMMIT");
+    return res.json({
+      success: true,
+      site: {
+        ...result.rows[0],
+        user_id: Number(result.rows[0].user_id),
+        url: `https://${subdomain}.${config.agentSiteBaseDomain}`,
+      },
+      actor: admin.email || null,
+    });
+  } catch (error) {
+    try { await client.query("ROLLBACK"); } catch {}
+    const message = error instanceof Error ? error.message : "Failed to create agent subdomain";
+    const status = String(error?.code || "") === "23505" ? 409 : 400;
+    return jsonError(res, status, message);
+  } finally {
+    client.release();
+  }
+});
+
+app.delete("/admin/agent-subdomains/:subdomain", async (req, res) => {
+  const admin = await ensureAdmin(req, res);
+  if (!admin) return;
+
+  const subdomain = normalizeSubdomain(req.params.subdomain);
+  if (!subdomain) {
+    return jsonError(res, 400, "Invalid subdomain");
+  }
+  try {
+    const result = await pool.query(
+      `
+      UPDATE agent_subdomains
+      SET status = 'disabled', updated_at = NOW()
+      WHERE subdomain = $1
+      RETURNING subdomain, user_id, status, updated_at
+      `,
+      [subdomain],
+    );
+    if (!result.rows.length) {
+      return jsonError(res, 404, "Agent subdomain not found");
+    }
+    return res.json({
+      success: true,
+      site: { ...result.rows[0], user_id: Number(result.rows[0].user_id) },
+      actor: admin.email || null,
+    });
+  } catch (error) {
+    return jsonError(res, 500, error instanceof Error ? error.message : "Failed to disable agent subdomain");
   }
 });
 

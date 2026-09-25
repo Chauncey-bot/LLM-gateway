@@ -75,6 +75,7 @@ let trafficPackReclaimTimer = null;
 
 const corsAllowedOrigins = new Set([
   "https://ai.zhisales.com",
+  "https://gpt.zhisales.com",
   "https://www.zhisales.com",
 ]);
 

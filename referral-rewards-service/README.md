@@ -5,6 +5,7 @@ Standalone referral rewards + points redemption service.
 ## What it does
 
 - Reuses existing `sub2api` user identity
+- Maps an agent account to a wildcard subdomain without creating a second account system
 - Creates and resolves invite referral codes
 - Binds referral relationships on registration
 - Grants points to the referrer when the referred user buys configured SKUs
@@ -14,12 +15,16 @@ Standalone referral rewards + points redemption service.
 ## Main endpoints
 
 - `GET /health`
+- `GET /api/site/context` (resolves the current Host to an agent account)
 - `GET /api/referral/me`
 - `POST /api/referral/bind-registration`
 - `GET /api/points/ledger`
 - `GET /api/redemptions/catalog`
 - `POST /api/redemptions/redeem`
 - `POST /internal/events/order-fulfilled`
+- `GET /admin/agent-subdomains`
+- `POST /admin/agent-subdomains`
+- `DELETE /admin/agent-subdomains/:subdomain`
 - `PUT /admin/reward-rules/:sku_code`
 - `PUT /admin/redemption-rules/:sku_code`
 - `GET /admin/referrals`
@@ -35,6 +40,28 @@ Standalone referral rewards + points redemption service.
 - Reward callbacks are idempotent by `event_id` (or fallback `order_id`).
 - Referral relationships can only be corrected via admin APIs.
 - The service expects access to the same SKU catalog used by `zhisales-pay-service`.
+- Set `AGENT_SITE_BASE_DOMAIN` to the base domain used by the wildcard DNS record. An agent site is addressed as `https://{subdomain}.{AGENT_SITE_BASE_DOMAIN}`.
+- The public registration binding endpoint prefers the active agent subdomain from the request Host. The internal binding endpoint accepts `subdomain` or `host`; `referral_code` remains supported for the existing registration flow.
+- Authenticated rewards requests on an active agent subdomain also perform a best-effort one-time bind. This keeps the existing registration UI unchanged while ensuring a newly registered user is bound when the dashboard or referral center loads.
+
+## Agent subdomain setup
+
+Create a wildcard DNS record and route it to the same frontend/backend entry point:
+
+```text
+*.zhisales.com  -> existing site entry point
+```
+
+Then an administrator can assign a subdomain to an existing account:
+
+```bash
+curl -X POST https://rewards.example.internal/admin/agent-subdomains \
+  -H 'X-Admin-Key: your-admin-key' \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id": 1001, "subdomain": "a123"}'
+```
+
+If `subdomain` is omitted, the user's existing referral code is used when it is a valid DNS label.
 
 ## Bootstrap rules
 

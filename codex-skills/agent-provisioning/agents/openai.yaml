@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Provisioning"
+  short_description: "Provision agent subdomains and referral sites"
+  default_prompt: "Use $agent-provisioning to add an existing agent account, map its subdomain, and verify referral and purchase routing."
