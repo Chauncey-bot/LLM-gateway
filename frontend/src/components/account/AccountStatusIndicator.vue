@@ -94,7 +94,7 @@
           class="inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400"
         >
           <Icon name="exclamationTriangle" size="xs" :stroke-width="2" />
-          {{ t('admin.accounts.status.creditsExhausted') }}
+          {{ t('account.creditsExhausted') }}
           <span class="text-[10px] opacity-70">{{ formatModelResetTime(item.reset_at) }}</span>
         </span>
         <!-- 正在走积分（模型限流但积分可用）-->
@@ -121,7 +121,7 @@
         >
           {{
             item.kind === 'credits_exhausted'
-              ? t('admin.accounts.status.creditsExhaustedUntil', { time: formatTime(item.reset_at) })
+              ? t('account.creditsExhaustedUntil', { time: formatTime(item.reset_at) })
               : item.kind === 'credits_active'
                 ? t('admin.accounts.status.modelCreditOveragesUntil', { model: formatScopeName(item.model), time: formatTime(item.reset_at) })
                 : t('admin.accounts.status.modelRateLimitedUntil', { model: formatScopeName(item.model), time: formatTime(item.reset_at) })

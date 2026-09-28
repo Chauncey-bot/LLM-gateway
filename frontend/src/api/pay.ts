@@ -1,7 +1,9 @@
 import { getLocale } from '@/i18n'
 
+const DEFAULT_PRODUCTION_PAY_API_BASE_URL = 'https://ai.zhisales.com'
 const PAY_API_BASE_URL =
-  import.meta.env.VITE_PAY_API_BASE_URL || (import.meta.env.DEV ? '' : 'https://www.zhisales.com')
+  import.meta.env.VITE_PAY_API_BASE_URL ||
+  (import.meta.env.DEV ? '' : DEFAULT_PRODUCTION_PAY_API_BASE_URL)
 const PAY_EMBEDDED_TOKEN_KEY = 'pay_embedded_token'
 const AUTH_TOKEN_KEY = 'auth_token'
 

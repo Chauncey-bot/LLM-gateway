@@ -1,4 +1,8 @@
 export default {
+  account: {
+    creditsExhausted: 'Credits Exhausted',
+    creditsExhaustedUntil: 'AI Credits exhausted, expected recovery at {time}'
+  },
   // Home Page
   home: {
     viewOnGithub: 'View on GitHub',

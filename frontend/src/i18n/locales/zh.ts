@@ -1,4 +1,8 @@
 export default {
+  account: {
+    creditsExhausted: '积分已用尽',
+    creditsExhaustedUntil: 'AI Credits 已用尽，预计 {time} 恢复'
+  },
   // Home Page
   home: {
     viewOnGithub: '在 GitHub 上查看',

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release to Production"
+  short_description: "Build locally, then safely deploy production changes"
+  default_prompt: "Use $release-to-production to build the changed component locally, verify it, and deploy the approved release to production."

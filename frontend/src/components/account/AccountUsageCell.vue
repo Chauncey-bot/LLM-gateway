@@ -932,7 +932,9 @@ const loadUsage = async (source?: 'passive' | 'active') => {
   error.value = null
 
   try {
-    usageInfo.value = await adminAPI.accounts.getUsage(props.account.id, source)
+    usageInfo.value = source === undefined
+      ? await adminAPI.accounts.getUsage(props.account.id)
+      : await adminAPI.accounts.getUsage(props.account.id, source)
   } catch (e: any) {
     error.value = t('common.error')
     console.error('Failed to load usage:', e)
