@@ -13,6 +13,34 @@ import type {
   ModelStat
 } from '@/types'
 
+// User usage responses must contain only the amount charged to the account.
+// Keep provider pricing, cost components, and billing multipliers out of the
+// user-facing data model even if an older upstream API still returns them.
+const USER_HIDDEN_USAGE_FIELDS = [
+  'input_cost',
+  'output_cost',
+  'cache_creation_cost',
+  'cache_read_cost',
+  'total_cost',
+  'total_standard_cost',
+  'standard_cost',
+  'cost',
+  'rate_multiplier',
+  'account_rate_multiplier'
+] as const
+
+function sanitizeUserUsageLog(log: UsageLog): UsageLog {
+  const source = log as UsageLog & Record<string, unknown>
+  const actualCost = source.actual_cost ?? source.total_cost ?? source.cost ?? 0
+  const sanitized = { ...source, actual_cost: Number(actualCost) || 0 } as UsageLog & Record<string, unknown>
+  for (const field of USER_HIDDEN_USAGE_FIELDS) delete sanitized[field]
+  return sanitized as UsageLog
+}
+
+function sanitizeUserUsagePage(data: PaginatedResponse<UsageLog>): PaginatedResponse<UsageLog> {
+  return { ...data, items: data.items.map(sanitizeUserUsageLog) }
+}
+
 // ==================== Dashboard Types ====================
 
 export interface UserDashboardStats {
@@ -82,7 +110,7 @@ export async function list(
   const { data } = await apiClient.get<PaginatedResponse<UsageLog>>('/usage', {
     params
   })
-  return data
+  return sanitizeUserUsagePage(data)
 }
 
 /**
@@ -98,7 +126,7 @@ export async function query(
     ...config,
     params
   })
-  return data
+  return sanitizeUserUsagePage(data)
 }
 
 /**
@@ -181,7 +209,7 @@ export async function getByDateRange(
   const { data } = await apiClient.get<PaginatedResponse<UsageLog>>('/usage', {
     params
   })
-  return data
+  return sanitizeUserUsagePage(data)
 }
 
 /**
@@ -191,7 +219,7 @@ export async function getByDateRange(
  */
 export async function getById(id: number): Promise<UsageLog> {
   const { data } = await apiClient.get<UsageLog>(`/usage/${id}`)
-  return data
+  return sanitizeUserUsageLog(data)
 }
 
 // ==================== Dashboard API ====================

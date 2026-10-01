@@ -37,6 +37,15 @@ const config = {
 };
 
 const pool = new Pool(config.db);
+const mainUserPool = process.env.SUB2API_DB_NAME
+  ? new Pool({
+      host: process.env.SUB2API_DB_HOST || config.db.host,
+      port: Number(process.env.SUB2API_DB_PORT || config.db.port),
+      database: process.env.SUB2API_DB_NAME,
+      user: process.env.SUB2API_DB_USER || config.db.user,
+      password: process.env.SUB2API_DB_PASSWORD || config.db.password,
+    })
+  : null;
 const app = express();
 const adminSession = {
   token: null,
@@ -921,6 +930,57 @@ app.get("/api/referral/me", async (req, res) => {
     }
   } catch (error) {
     jsonError(res, 500, error instanceof Error ? error.message : "Failed to load referral profile");
+  }
+});
+
+app.get("/api/referral/invited", async (req, res) => {
+  const user = await ensureAuthenticatedUser(req, res);
+  if (!user) return;
+
+  try {
+    const result = await pool.query(
+      `SELECT id, referred_user_id, status, source_code, bound_at
+       FROM referral_relationships
+       WHERE referrer_user_id = $1
+       ORDER BY bound_at DESC, id DESC`,
+      [Number(user.id)],
+    );
+
+    // User identity lives in the main API. Enrich when admin credentials are
+    // configured, while keeping the relationship list usable without them.
+    const items = await Promise.all(result.rows.map(async (row) => {
+      let identity = {};
+      if (mainUserPool) {
+        try {
+          const userResult = await mainUserPool.query(
+            `SELECT username, email FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+            [Number(row.referred_user_id)],
+          );
+          identity = {
+            username: userResult.rows[0]?.username || userResult.rows[0]?.email || null,
+          };
+        } catch {
+          // Fall back to the main API when the optional read-only user DB is unavailable.
+        }
+      }
+      try {
+        if (!identity.username) {
+          const data = await sub2apiAdminJson(`/api/v1/admin/users/${row.referred_user_id}`);
+          const candidate = data?.user || data;
+          identity = {
+            username: candidate?.username || candidate?.email || candidate?.name || null,
+          };
+        }
+      } catch {
+        // Relationship IDs are still useful when the identity lookup is unavailable.
+      }
+      return { ...row, referred_user_id: Number(row.referred_user_id), ...identity };
+    }));
+
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({ total: items.length, items });
+  } catch (error) {
+    return jsonError(res, 500, error instanceof Error ? error.message : "Failed to load invited users");
   }
 });
 

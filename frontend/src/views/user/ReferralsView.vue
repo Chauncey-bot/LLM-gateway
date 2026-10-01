@@ -20,10 +20,10 @@
         </div>
 
         <div class="relative z-10 mt-6 grid gap-3 sm:grid-cols-3 lg:mt-0 lg:w-[520px]">
-          <div v-for="metric in heroMetrics" :key="metric.label" class="metric-tile">
+          <button v-for="metric in heroMetrics" :key="metric.label" type="button" :class="['metric-tile text-left transition-colors', isInvitedMetric(metric) ? 'cursor-pointer hover:border-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.06]' : '']" :disabled="!isInvitedMetric(metric)" @click="isInvitedMetric(metric) && openInvitedDialog()">
             <p class="text-xs font-medium text-slate-500 dark:text-slate-400">{{ metric.label }}</p>
             <p class="mt-2 text-3xl font-semibold text-slate-950 dark:text-white">{{ metric.value }}</p>
-          </div>
+          </button>
         </div>
       </section>
 
@@ -44,10 +44,10 @@
               </div>
 
               <div class="mt-6 grid gap-3 sm:grid-cols-3">
-                <div v-for="metric in heroMetrics" :key="`card-${metric.label}`" class="metric-tile">
+                <button v-for="metric in heroMetrics" :key="`card-${metric.label}`" type="button" :class="['metric-tile text-left transition-colors', isInvitedMetric(metric) ? 'cursor-pointer hover:border-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.06]' : '']" :disabled="!isInvitedMetric(metric)" @click="isInvitedMetric(metric) && openInvitedDialog()">
                   <p class="text-sm text-slate-500 dark:text-slate-400">{{ metric.label }}</p>
                   <p class="mt-2 text-3xl font-semibold text-slate-950 dark:text-white">{{ metric.value }}</p>
-                </div>
+                </button>
               </div>
 
               <div class="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.035]">
@@ -147,6 +147,29 @@
         </div>
       </section>
 
+      <BaseDialog :show="invitedDialogOpen" :title="t('referrals.invitedListTitle')" width="wide" close-on-click-outside @close="closeInvitedDialog">
+        <div v-if="invitedLoading" class="py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+          {{ t('common.loading') }}
+        </div>
+        <div v-else-if="invitedError" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-400/20 dark:bg-red-400/10 dark:text-red-200">
+          {{ invitedError }}
+        </div>
+        <div v-else-if="invitedUsers.length === 0" class="py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+          {{ t('referrals.invitedListEmpty') }}
+        </div>
+        <div v-else class="space-y-2">
+          <div v-for="item in invitedUsers" :key="item.id" class="surface-tile flex items-center justify-between gap-4 px-4 py-3">
+            <div class="min-w-0">
+              <p class="truncate font-medium text-slate-950 dark:text-white">{{ item.username || '--' }}</p>
+            </div>
+            <div class="shrink-0 text-right">
+              <p class="text-xs text-slate-500 dark:text-slate-400">{{ t('referrals.invitedAt') }}</p>
+              <p class="text-sm text-slate-700 dark:text-slate-200">{{ formatDate(item.bound_at) }}</p>
+            </div>
+          </div>
+        </div>
+      </BaseDialog>
+
       <section>
         <div class="card p-5">
           <h3 class="text-base font-semibold text-slate-950 dark:text-white">{{ t('referrals.rewardRules') }}</h3>
@@ -173,10 +196,13 @@ import { useI18n } from 'vue-i18n'
 import QRCode from 'qrcode'
 import { AppLayout } from '@/components/layout'
 import Icon from '@/components/icons/Icon.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import { useAppStore } from '@/stores'
 import {
   bindReferralRegistration,
+  getInvitedReferrals,
   getReferralProfile,
+  type InvitedReferralItem,
   type ReferralProfile
 } from '@/api/referrals'
 
@@ -189,6 +215,10 @@ const bindCode = ref('')
 const errorMessage = ref('')
 const qrCodeDataUrl = ref('')
 const profile = ref<ReferralProfile | null>(null)
+const invitedDialogOpen = ref(false)
+const invitedLoading = ref(false)
+const invitedError = ref('')
+const invitedUsers = ref<InvitedReferralItem[]>([])
 
 const pointsBalance = computed(() => profile.value?.points_balance ?? 0)
 const inviterCode = computed(() => {
@@ -223,6 +253,35 @@ const heroMetrics = computed(() => [
     value: String(profile.value?.rewarded_purchase_count ?? '--')
   }
 ])
+
+function isInvitedMetric(metric: { label: string }): boolean {
+  return metric.label === t('referrals.invitedFriends')
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
+async function openInvitedDialog(): Promise<void> {
+  invitedDialogOpen.value = true
+  invitedLoading.value = true
+  invitedError.value = ''
+  try {
+    const response = await getInvitedReferrals()
+    invitedUsers.value = response.items
+  } catch (error) {
+    invitedError.value = getErrorMessage(error, t('referrals.invitedListLoadFailed'))
+  } finally {
+    invitedLoading.value = false
+  }
+}
+
+function closeInvitedDialog(): void {
+  invitedDialogOpen.value = false
+}
 
 const rewardRules = computed(() => [
   {

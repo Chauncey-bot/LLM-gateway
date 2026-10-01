@@ -100,7 +100,7 @@ describe('user UsageView tooltip', () => {
     }
   })
 
-  it('shows fast service tier and unit prices in user tooltip', async () => {
+  it('does not expose provider pricing or billing multipliers', async () => {
     query.mockResolvedValue({
       items: [
         {
@@ -173,14 +173,12 @@ describe('user UsageView tooltip', () => {
     await nextTick()
 
     const text = wrapper.text()
-    expect(text).toContain('Service tier')
-    expect(text).toContain('Fast')
-    expect(text).toContain('Rate')
-    expect(text).toContain('1.00x')
     expect(text).toContain('Billed')
     expect(text).toContain('$0.092883')
-    expect(text).toContain('$5.0000 / 1M tokens')
-    expect(text).toContain('$30.0000 / 1M tokens')
+    expect(text).not.toContain('Rate')
+    expect(text).not.toContain('1.00x')
+    expect(text).not.toContain('$5.0000 / 1M tokens')
+    expect(text).not.toContain('$30.0000 / 1M tokens')
   })
 
   it('exports csv with input and output unit price columns', async () => {

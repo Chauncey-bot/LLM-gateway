@@ -50,6 +50,20 @@ export interface ReferralProfile {
   referrer_bound_at?: string | null
 }
 
+export interface InvitedReferralItem {
+  id: number
+  referred_user_id: number
+  username?: string | null
+  status: string
+  source_code: string
+  bound_at: string | null
+}
+
+export interface InvitedReferralListResponse {
+  total: number
+  items: InvitedReferralItem[]
+}
+
 export interface PointsLedgerItem {
   id: number
   direction: 'credit' | 'debit'
@@ -129,6 +143,11 @@ export async function getReferralProfile(): Promise<ReferralProfile> {
   return data
 }
 
+export async function getInvitedReferrals(): Promise<InvitedReferralListResponse> {
+  const { data } = await rewardsClient.get<InvitedReferralListResponse>('/api/referral/invited')
+  return data
+}
+
 export async function getAdminReferrals(
   page = 1,
   pageSize = 100,
@@ -193,6 +212,7 @@ export async function redeemWithPoints(skuCode: string): Promise<RedemptionResul
 
 export const referralsAPI = {
   getReferralProfile,
+  getInvitedReferrals,
   bindReferralRegistration,
   getPointsLedger,
   getRedemptionCatalog,
