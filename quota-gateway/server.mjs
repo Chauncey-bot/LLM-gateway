@@ -2,6 +2,7 @@ import http from "node:http";
 
 import express from "express";
 import pg from "pg";
+import WebSocket, { WebSocketServer } from "ws";
 
 import { chinaDay } from "./quota-engine.mjs";
 import { checkCumulativeQuota } from "./cumulative-quota.mjs";
@@ -116,9 +117,12 @@ function isInternalRequest(req) {
 }
 
 function parseApiKey(req) {
-  const authorization = req.get("authorization") || "";
+  const authorization = typeof req.get === "function"
+    ? req.get("authorization") || ""
+    : req.headers?.authorization || "";
   if (authorization.startsWith("Bearer ")) return authorization.slice(7).trim();
-  return (req.get("x-api-key") || "").trim();
+  const xApiKey = typeof req.get === "function" ? req.get("x-api-key") : req.headers?.["x-api-key"];
+  return (xApiKey || "").trim();
 }
 
 function jsonError(res, status, message) {
@@ -401,6 +405,176 @@ function createProxyHandler({ quotaDb, upstreamDb, upstreamBaseUrl = config.upst
   };
 }
 
+const WS_CLIENT_HEADERS = new Set([
+  "connection", "host", "upgrade", "sec-websocket-key", "sec-websocket-version",
+  "sec-websocket-accept", "sec-websocket-extensions", "sec-websocket-protocol",
+]);
+
+function websocketUpstreamUrl(upstreamBaseUrl, requestUrl) {
+  const url = new URL(`${upstreamBaseUrl}${requestUrl}`);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
+function websocketHeaders(req) {
+  return Object.fromEntries(Object.entries(req.headers || {})
+    .filter(([name]) => !WS_CLIENT_HEADERS.has(name.toLowerCase()))
+    .map(([name, value]) => [name, Array.isArray(value) ? value.join(", ") : value]));
+}
+
+function rejectUpgrade(socket, status, message) {
+  if (socket.destroyed) return;
+  const body = JSON.stringify({ error: { message, type: "quota_error" } });
+  socket.write(
+    `HTTP/1.1 ${status} ${http.STATUS_CODES[status] || "Error"}\r\n` +
+    "Content-Type: application/json\r\n" +
+    `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+    "Connection: close\r\n\r\n" + body,
+  );
+  socket.destroy();
+}
+
+async function readUnexpectedResponse(response) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of response) {
+    size += chunk.length;
+    if (size <= 1024 * 1024) chunks.push(chunk);
+    if (size >= 1024 * 1024) break;
+  }
+  return { statusCode: response.statusCode || 502, body: Buffer.concat(chunks) };
+}
+
+function connectWebSocket(upstreamUrl, headers, protocols = [], timeoutMs = 15_000) {
+  return new Promise((resolve, reject) => {
+    const options = { headers };
+    const upstream = protocols.length
+      ? new WebSocket(upstreamUrl, protocols, options)
+      : new WebSocket(upstreamUrl, options);
+    const earlyMessages = [];
+    upstream.__quotaEarlyMessages = earlyMessages;
+    upstream.on("message", (data, isBinary) => earlyMessages.push({ data, isBinary }));
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      upstream.terminate();
+      reject(new Error("WebSocket upstream handshake timed out"));
+    }, timeoutMs);
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+    upstream.once("open", () => finish(resolve, upstream));
+    upstream.once("error", (error) => finish(reject, error));
+    upstream.once("unexpected-response", async (_request, response) => {
+      const result = await readUnexpectedResponse(response);
+      upstream.terminate();
+      finish(reject, Object.assign(new Error(`WebSocket upstream rejected with ${result.statusCode}`), {
+        statusCode: result.statusCode,
+        responseBody: result.body,
+      }));
+    });
+  });
+}
+
+function bridgeWebSockets(client, upstream) {
+  const pending = [];
+  let upstreamReady = upstream.readyState === WebSocket.OPEN;
+  let pendingBytes = 0;
+  const maxPendingBytes = 16 * 1024 * 1024;
+  const earlyMessages = upstream.__quotaEarlyMessages || [];
+  delete upstream.__quotaEarlyMessages;
+  const closeSocket = (ws, code, reason) => {
+    const safeCode = Number.isInteger(code) && code >= 1000 && code <= 4999 ? code : 1000;
+    const safeReason = Buffer.isBuffer(reason) ? reason.toString() : String(reason || "");
+    try { ws.close(safeCode, safeReason); } catch { ws.terminate(); }
+  };
+  const closeBoth = (code = 1000, reason = "") => {
+    if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) closeSocket(client, code, reason);
+    if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) closeSocket(upstream, code, reason);
+  };
+  client.on("message", (data, isBinary) => {
+    const payload = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (!upstreamReady) {
+      pendingBytes += payload.length;
+      if (pendingBytes > maxPendingBytes) return closeBoth(1009, "WebSocket proxy queue exceeded");
+      pending.push({ payload, isBinary });
+      return;
+    }
+    if (upstream.readyState === WebSocket.OPEN) upstream.send(payload, { binary: isBinary });
+  });
+  upstream.once("open", () => {
+    upstreamReady = true;
+    for (const item of pending) upstream.send(item.payload, { binary: item.isBinary });
+    pending.length = 0;
+  });
+  upstream.on("message", (data, isBinary) => {
+    if (client.readyState === WebSocket.OPEN) client.send(data, { binary: isBinary });
+  });
+  for (const { data, isBinary } of earlyMessages) {
+    if (client.readyState === WebSocket.OPEN) client.send(data, { binary: isBinary });
+  }
+  client.on("close", (code, reason) => {
+    if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) closeSocket(upstream, code, reason);
+  });
+  upstream.on("close", (code, reason) => {
+    if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) closeSocket(client, code, reason);
+  });
+  client.on("error", () => closeBoth(1011, "Client WebSocket error"));
+  upstream.on("error", () => closeBoth(1011, "Upstream WebSocket error"));
+}
+
+export function attachWebSocketServer(server, {
+  quotaDb,
+  upstreamDb,
+  upstreamBaseUrl = config.upstreamBaseUrl,
+  switchApiKeyGroup = createAdminApiKeySwitcher({
+    upstreamBaseUrl,
+    email: config.sub2apiAdminEmail,
+    password: config.sub2apiAdminPassword,
+  }),
+  websocketServer = new WebSocketServer({ noServer: true }),
+} = {}) {
+  const handleUpgrade = async (req, socket, head) => {
+    const apiKey = parseApiKey(req);
+    if (!apiKey) return rejectUpgrade(socket, 401, "Missing API key");
+    try {
+      const owner = await findApiKeyOwner(upstreamDb, apiKey);
+      if (!owner) return rejectUpgrade(socket, 401, "Invalid API key");
+      const cumulative = await checkCumulativeQuota(upstreamDb, owner, undefined, new Date(), quotaDb);
+      if (cumulative && !cumulative.allowed) {
+        return rejectUpgrade(socket, cumulative.status, cumulative.message);
+      }
+
+      const upstreamUrl = websocketUpstreamUrl(upstreamBaseUrl, req.url || "/");
+      const protocols = String(req.headers?.["sec-websocket-protocol"] || "")
+        .split(",").map((protocol) => protocol.trim()).filter(Boolean);
+      let upstream;
+      try {
+        upstream = await connectWebSocket(upstreamUrl, websocketHeaders(req), protocols);
+      } catch (error) {
+        if (error?.statusCode === 429 && isDailyLimitExceededResponse(error.statusCode, error.responseBody)) {
+          const switched = await switchApiKeyToTrafficPack({ quotaDb, owner, switchApiKeyGroup });
+          if (switched.switched) upstream = await connectWebSocket(upstreamUrl, websocketHeaders(req), protocols);
+          else return rejectUpgrade(socket, 429, "Daily quota exceeded");
+        } else {
+          return rejectUpgrade(socket, error?.statusCode >= 400 ? error.statusCode : 502, error?.message || "Upstream WebSocket unavailable");
+        }
+      }
+
+      websocketServer.handleUpgrade(req, socket, head, (client) => bridgeWebSockets(client, upstream));
+    } catch (error) {
+      console.error(`[quota-gateway] WebSocket upgrade failed: ${error?.message || error}`);
+      rejectUpgrade(socket, 502, "Upstream WebSocket unavailable");
+    }
+  };
+  server.on("upgrade", handleUpgrade);
+  return { websocketServer, handleUpgrade };
+}
+
 export function createApp({
   quotaDb = new Pool(config.quotaDb),
   upstreamDb = new Pool(config.upstreamDb),
@@ -433,7 +607,9 @@ if (process.argv[1] && new URL(`file://${process.argv[1]}`).href === import.meta
   const quotaDb = new Pool(config.quotaDb);
   const upstreamDb = new Pool(config.upstreamDb);
   await ensureQuotaSchema(quotaDb);
-  createApp({ quotaDb, upstreamDb, startReaper: true }).listen(config.port, () => {
+  const server = http.createServer(createApp({ quotaDb, upstreamDb, startReaper: true }));
+  attachWebSocketServer(server, { quotaDb, upstreamDb, switchApiKeyGroup: undefined });
+  server.listen(config.port, () => {
     console.log(`[quota-gateway] listening on :${config.port}, upstream=${config.upstreamBaseUrl}, day=${chinaDay()}`);
   });
 }

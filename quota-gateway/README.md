@@ -23,6 +23,12 @@ npm test
 npm start
 ```
 
+网关同时支持 HTTP 和 WebSocket。WebSocket 请求会在完成 API Key、累计额度校验后，使用 `ws://`/`wss://` 对应的上游地址建立真正的 Upgrade，再转发客户端与 Sub2API 之间的双向帧；普通 HTTP 转发和 Sub2API 的额度判断逻辑保持不变。WebSocket 集成测试单独运行：
+
+```bash
+node --test integration/websocket-proxy.integration.mjs
+```
+
 历史过期 hold 的清理：
 
 ```bash
