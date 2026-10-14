@@ -14,8 +14,25 @@ export interface PaymentSessionUser {
   role: 'admin' | 'user' | string
 }
 
+export interface AdminPaymentUser {
+  id: number
+  email: string
+  username: string
+  role: string
+  status: string
+  discountPercent: number
+}
+
+export interface AdminPaymentUserListResponse {
+  users: AdminPaymentUser[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 export interface PaymentSessionResponse {
   user: PaymentSessionUser
+  discountPercent?: number
   querySupported: boolean
 }
 
@@ -222,6 +239,30 @@ export function isPayApiError(error: unknown): error is PayApiError {
   return error instanceof Error
 }
 
+export async function listAdminPaymentUsers(params: {
+  page?: number
+  pageSize?: number
+  search?: string
+} = {}): Promise<AdminPaymentUserListResponse> {
+  return payRequest<AdminPaymentUserListResponse>('/pay-api/admin/users', {
+    query: {
+      page: params.page ?? 1,
+      page_size: params.pageSize ?? 200,
+      search: params.search
+    }
+  })
+}
+
+export async function updateAdminUserDiscount(
+  userId: number,
+  discountPercent: number
+): Promise<{ userId: number; discountPercent: number }> {
+  return payRequest(`/pay-api/admin/users/${encodeURIComponent(userId)}/discount`, {
+    method: 'PUT',
+    body: JSON.stringify({ discountPercent })
+  })
+}
+
 export async function getPaymentSession(): Promise<PaymentSessionResponse> {
   return payRequest<PaymentSessionResponse>('/pay-api/session')
 }
@@ -304,6 +345,8 @@ export async function updateAdminPaymentOrderStatus(
 
 export const payAPI = {
   getSession: getPaymentSession,
+  listAdminUsers: listAdminPaymentUsers,
+  updateAdminUserDiscount,
   getCatalog: getPaymentCatalog,
   getDailyQuota: getPaymentDailyQuota,
   createOrder: createPaymentOrder,

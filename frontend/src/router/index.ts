@@ -485,7 +485,7 @@ const navigationLoading = useNavigationLoadingState()
 let routePrefetch: ReturnType<typeof useRoutePrefetch> | null = null
 const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup']
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   // 开始导航加载状态
   navigationLoading.startNavigation()
 
@@ -495,6 +495,22 @@ router.beforeEach((to, _from, next) => {
   if (!authInitialized) {
     authStore.checkAuth()
     authInitialized = true
+  }
+
+  // Legacy payment links carry the access token in the query string. Adopt it
+  // before the auth guard runs so redirects from the payment service open the
+  // current native purchase page without forcing another login.
+  const embeddedToken = typeof to.query.token === 'string' ? to.query.token : ''
+  if (embeddedToken && !authStore.isAuthenticated) {
+    try {
+      await authStore.setToken(embeddedToken)
+      const query = { ...to.query }
+      delete query.token
+      next({ path: to.path, query, replace: true })
+      return
+    } catch {
+      // Fall through to the normal login redirect for an invalid token.
+    }
   }
 
   // Set page title

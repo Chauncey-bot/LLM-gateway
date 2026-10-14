@@ -407,6 +407,12 @@
             </div>
           </template>
 
+          <template #cell-discountPercent="{ row }">
+            <span class="text-sm text-gray-700 dark:text-gray-300">
+              {{ row.discountPercent == null ? '-' : `${Number(row.discountPercent).toFixed(1)}%` }}
+            </span>
+          </template>
+
           <template #cell-usage="{ row }">
             <div class="text-sm">
               <div class="flex items-center gap-1.5">
@@ -611,6 +617,7 @@ import Icon from '@/components/icons/Icon.vue'
 const { t } = useI18n()
 import { adminAPI } from '@/api/admin'
 import { getAdminReferrals, type AdminReferralItem } from '@/api/referrals'
+import { payAPI } from '@/api/pay'
 import type { AdminUser, AdminGroup, UserAttributeDefinition } from '@/types'
 import type { BatchUserUsageStats } from '@/api/admin/dashboard'
 import type { Column } from '@/components/common/types'
@@ -997,6 +1004,7 @@ const allColumns = computed<Column[]>(() => [
   { key: 'groups', label: t('admin.users.columns.groups'), sortable: false },
   { key: 'subscriptions', label: t('admin.users.columns.subscriptions'), sortable: false },
   { key: 'balance', label: t('admin.users.columns.balance'), sortable: true },
+  { key: 'discountPercent', label: t('admin.users.columns.discount'), sortable: true },
   { key: 'usage', label: t('admin.users.columns.usage'), sortable: false },
   { key: 'concurrency', label: t('admin.users.columns.concurrency'), sortable: true },
   { key: 'status', label: t('admin.users.columns.status'), sortable: true },
@@ -1086,6 +1094,22 @@ const loading = ref(false)
 const referrerEmailCache = ref<Record<number, string>>({})
 const referrerLookupSeq = ref(0)
 const searchQuery = ref('')
+
+const loadUserDiscounts = async (currentUsers: AdminUser[]) => {
+  if (currentUsers.length === 0) return
+  try {
+    const response = await payAPI.listAdminUsers({ search: searchQuery.value || undefined })
+    if (users.value !== currentUsers) return
+    const discounts = new Map(response.users.map((user) => [Number(user.id), Number(user.discountPercent ?? 0)]))
+    currentUsers.forEach((user) => {
+      if (discounts.has(user.id)) user.discountPercent = discounts.get(user.id)
+    })
+    users.value = [...currentUsers]
+  } catch (error) {
+    // The payment service is optional for the core user-management page.
+    console.warn('Failed to load user discounts:', error)
+  }
+}
 
 // Groups data for the groups column
 const allGroups = ref<AdminGroup[]>([])
@@ -1445,6 +1469,7 @@ const loadUsers = async () => {
       return
     }
     users.value = response.items
+    void loadUserDiscounts(users.value)
     pagination.total = response.total
     pagination.pages = response.pages
     usageStats.value = {}

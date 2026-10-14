@@ -147,8 +147,14 @@
                     {{ item.description || t('purchase.noDescription') }}
                   </p>
 
-                  <div class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
-                    {{ formatAmount(item.amountCents) }}
+                  <div>
+                    <div class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+                      {{ formatAmount(discountedAmount(item.amountCents)) }}
+                    </div>
+                    <div v-if="hasDiscount" class="mt-1 text-sm text-gray-500 dark:text-dark-400">
+                      <span class="line-through">{{ formatAmount(item.amountCents) }}</span>
+                      <span class="ml-2 text-emerald-600 dark:text-emerald-400">{{ t('purchase.discountLabel', { percent: discountPercent }) }}</span>
+                    </div>
                   </div>
 
                   <div class="rounded-2xl bg-slate-50 px-3 py-2 dark:bg-white/5">
@@ -214,8 +220,14 @@
                     {{ item.description || t('purchase.noDescription') }}
                   </p>
 
-                  <div class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
-                    {{ formatAmount(item.amountCents) }}
+                  <div>
+                    <div class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+                      {{ formatAmount(discountedAmount(item.amountCents)) }}
+                    </div>
+                    <div v-if="hasDiscount" class="mt-1 text-sm text-gray-500 dark:text-dark-400">
+                      <span class="line-through">{{ formatAmount(item.amountCents) }}</span>
+                      <span class="ml-2 text-emerald-600 dark:text-emerald-400">{{ t('purchase.discountLabel', { percent: discountPercent }) }}</span>
+                    </div>
                   </div>
 
                   <div class="rounded-2xl bg-slate-50 px-3 py-3 text-sm text-gray-500 dark:bg-white/5 dark:text-dark-400">
@@ -288,8 +300,14 @@
                     {{ item.description || t('purchase.noDescription') }}
                   </p>
 
-                  <div class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
-                    {{ formatAmount(item.amountCents) }}
+                  <div>
+                    <div class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+                      {{ formatAmount(discountedAmount(item.amountCents)) }}
+                    </div>
+                    <div v-if="hasDiscount" class="mt-1 text-sm text-gray-500 dark:text-dark-400">
+                      <span class="line-through">{{ formatAmount(item.amountCents) }}</span>
+                      <span class="ml-2 text-emerald-600 dark:text-emerald-400">{{ t('purchase.discountLabel', { percent: discountPercent }) }}</span>
+                    </div>
                   </div>
 
                   <div class="rounded-2xl bg-slate-50 px-3 py-3 text-sm text-gray-500 dark:bg-white/5 dark:text-dark-400">
@@ -349,6 +367,8 @@ const catalog = ref<PaymentCatalogResponse>({
   balancePacks: [],
   trafficPacks: []
 })
+const discountPercent = computed(() => Math.min(100, Math.max(0, Number(session.value?.discountPercent ?? 0))))
+const hasDiscount = computed(() => discountPercent.value > 0)
 const querySupported = ref(true)
 const submittingSkuCode = ref('')
 const purchaseTheme = ref<'light' | 'dark'>('light')
@@ -416,6 +436,10 @@ function formatAmount(amountCents: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(amountCents / 100)
+}
+
+function discountedAmount(amountCents: number): number {
+  return Math.max(0, Math.round(Number(amountCents) * (1 - discountPercent.value / 100)))
 }
 
 async function loadPage(): Promise<void> {

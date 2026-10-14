@@ -41,6 +41,8 @@ export interface User {
 export interface AdminUser extends User {
   // 管理员备注（普通用户接口不返回）
   notes: string
+  // 支付服务中的管理员用户折扣（百分比）
+  discountPercent?: number
   // 用户专属分组倍率配置 (group_id -> rate_multiplier)
   group_rates?: Record<number, number>
   // 当前并发数（仅管理员列表接口返回）
