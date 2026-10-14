@@ -5477,3 +5477,4 @@ export default {
     examplePrompt4: '水墨画风格，一叶扁舟在山水间漂泊，薄雾缭绕，中国古典意境'
   }
 }
+      history: '历史记录',

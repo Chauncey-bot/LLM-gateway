@@ -5301,3 +5301,4 @@ export default {
     examplePrompt4: 'Chinese ink painting style, a small boat drifting among misty mountains and rivers, classical atmosphere'
   }
 }
+      history: 'Points history',

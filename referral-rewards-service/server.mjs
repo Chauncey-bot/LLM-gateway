@@ -1054,9 +1054,12 @@ app.post("/internal/referrals/bind-registration", async (req, res) => {
   }
 });
 
-app.get("/api/points/ledger", async (req, res) => {
-  const user = await ensureAuthenticatedUser(req, res);
+app.get(["/api/points/ledger", "/api/points/admin/accounts/:userId/ledger"], async (req, res) => {
+  const isAdminRequest = req.params.userId !== undefined;
+  const user = isAdminRequest ? await ensureAdmin(req, res) : await ensureAuthenticatedUser(req, res);
   if (!user) return;
+  const ledgerUserId = isAdminRequest ? parsePositiveInteger(req.params.userId) : Number(user.id);
+  if (!ledgerUserId) return jsonError(res, 400, "Invalid user ID");
 
   const page = Math.max(1, parseInteger(req.query.page) || 1);
   const pageSize = Math.min(100, Math.max(1, parseInteger(req.query.page_size) || 20));
@@ -1072,9 +1075,9 @@ app.get("/api/points/ledger", async (req, res) => {
         ORDER BY id DESC
         LIMIT $2 OFFSET $3
         `,
-        [Number(user.id), pageSize, offset],
+        [ledgerUserId, pageSize, offset],
       ),
-      pool.query(`SELECT COUNT(*)::int AS count FROM points_ledger WHERE user_id = $1`, [Number(user.id)]),
+      pool.query(`SELECT COUNT(*)::int AS count FROM points_ledger WHERE user_id = $1`, [ledgerUserId]),
     ]);
 
     res.setHeader("Cache-Control", "no-store");

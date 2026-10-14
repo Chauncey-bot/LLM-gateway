@@ -225,6 +225,13 @@ export async function getAdminPointsAccounts(
   return data
 }
 
+export async function getAdminPointsLedger(userId: number, page = 1): Promise<PointsLedgerResponse> {
+  const { data } = await rewardsClient.get<PointsLedgerResponse>(`/api/points/admin/accounts/${userId}/ledger`, {
+    params: { page, page_size: 20 }
+  })
+  return data
+}
+
 export async function getRedemptionCatalog(): Promise<RedemptionCatalogItem[]> {
   const { data } = await rewardsClient.get<{ items: RedemptionCatalogItem[] }>(
     '/api/redemptions/catalog'
@@ -247,7 +254,8 @@ export const referralsAPI = {
   getRedemptionCatalog,
   redeemWithPoints,
   getAdminReferrals,
-  getAdminPointsAccounts
+  getAdminPointsAccounts,
+  getAdminPointsLedger
 }
 
 export default referralsAPI
