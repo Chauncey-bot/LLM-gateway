@@ -127,7 +127,7 @@ test("builds a balance top-up fulfillment request", () => {
   });
 });
 
-test("builds a top-up balance fulfillment request for a designated subscription sku", () => {
+test("does not top up balance when fulfilling a subscription with legacy balance data", () => {
   const order = {
     merchant_order_id: "ZSALI202605230006",
     sku_type: "subscription",
@@ -140,18 +140,19 @@ test("builds a top-up balance fulfillment request for a designated subscription 
   const result = buildOrderFulfillmentRequest(order, []);
 
   assert.deepEqual(result, {
-    skuType: "balance",
-    operation: "add",
-    path: "/api/v1/admin/users/123/balance",
+    skuType: "subscription",
+    operation: "assign",
+    path: "/api/v1/admin/subscriptions/assign",
     body: {
-      balance: 100,
-      operation: "add",
+      user_id: 123,
+      group_id: 5,
+      validity_days: 1,
       notes: "payment:ZSALI202605230006",
     },
   });
 });
 
-test("builds a balance top-up and subscription request for a designated subscription sku", () => {
+test("subscription fulfillment never includes a balance top-up request", () => {
   const order = {
     merchant_order_id: "ZSALI202605230007",
     sku_type: "subscription",
@@ -165,16 +166,6 @@ test("builds a balance top-up and subscription request for a designated subscrip
   const result = buildOrderFulfillmentRequests(order, subscriptions);
 
   assert.deepEqual(result, [
-    {
-      skuType: "balance",
-      operation: "add",
-      path: "/api/v1/admin/users/123/balance",
-      body: {
-        balance: 100,
-        operation: "add",
-        notes: "payment:ZSALI202605230007",
-      },
-    },
     {
       skuType: "subscription",
       operation: "extend",

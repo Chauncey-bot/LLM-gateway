@@ -77,7 +77,7 @@ test("retries subscription fulfillment after a 409 by refreshing subscriptions",
   });
 });
 
-test("retries only subscription fulfillment after a 409 while keeping prior top-up actions", async () => {
+test("retries only subscription fulfillment after a 409 without a balance top-up", async () => {
   const order = {
     merchant_order_id: "ZSALI202605260003",
     sku_type: "subscription",
@@ -113,18 +113,8 @@ test("retries only subscription fulfillment after a 409 while keeping prior top-
     },
   });
 
-  assert.equal(submitCalls.length, 3);
+  assert.equal(submitCalls.length, 2);
   assert.deepEqual(submitCalls[0], {
-    skuType: "balance",
-    operation: "add",
-    path: "/api/v1/admin/users/123/balance",
-    body: {
-      balance: 100,
-      operation: "add",
-      notes: "payment:ZSALI202605260003",
-    },
-  });
-  assert.deepEqual(submitCalls[1], {
     skuType: "subscription",
     operation: "assign",
     path: "/api/v1/admin/subscriptions/assign",
@@ -135,7 +125,7 @@ test("retries only subscription fulfillment after a 409 while keeping prior top-
       notes: "payment:ZSALI202605260003",
     },
   });
-  assert.deepEqual(submitCalls[2], {
+  assert.deepEqual(submitCalls[1], {
     skuType: "subscription",
     operation: "assign",
     path: "/api/v1/admin/subscriptions/assign",

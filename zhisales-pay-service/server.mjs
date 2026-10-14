@@ -201,8 +201,11 @@ function generateMerchantOrderId() {
   return `ZSALI${stamp}${random}`;
 }
 
-function buildReturnUrl(merchantOrderId) {
-  return `${config.publicBaseUrl}/purchase/return?merchantOrderId=${encodeURIComponent(merchantOrderId)}`;
+function buildReturnUrl(merchantOrderId, token = "") {
+  const url = new URL(`${config.publicBaseUrl}/purchase/return`);
+  url.searchParams.set("merchantOrderId", merchantOrderId);
+  if (token) url.searchParams.set("token", token);
+  return url.toString();
 }
 
 function buildNotifyUrl() {
@@ -1907,7 +1910,7 @@ function html(mode) {
 </html>`;
 }
 
-async function createTradingOrder(order, sku) {
+async function createTradingOrder(order, sku, token = "") {
   if (!config.alipayBaseUrl || !config.alipayToken || !config.alipaySign) {
     throw new Error("Missing Alipay credentials");
   }
@@ -1919,7 +1922,7 @@ async function createTradingOrder(order, sku) {
     method: "ali_page",
     subject: orderTitleFromSku(sku),
     body: orderBodyFromSku(sku),
-    returnurl: buildReturnUrl(order.merchantOrderId),
+    returnurl: buildReturnUrl(order.merchantOrderId, token),
     notifyurl: buildNotifyUrl(),
     timestamp: String(Date.now()),
     nonce: generateNonce("pay"),
@@ -2050,15 +2053,24 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-app.get("/purchase", (_req, res) => {
+function redirectToNativePurchase(req, res, pathname) {
+  const target = new URL(`${config.sub2apiBaseUrl}${pathname}`);
+  for (const [key, value] of Object.entries(req.query || {})) {
+    if (Array.isArray(value)) {
+      value.forEach((item) => target.searchParams.append(key, String(item)));
+    } else if (value !== undefined) {
+      target.searchParams.set(key, String(value));
+    }
+  }
   res.setHeader("Cache-Control", "no-store");
-  res.type("html").send(html("purchase"));
-});
+  return res.redirect(302, target.toString());
+}
 
-app.get("/purchase/return", (_req, res) => {
-  res.setHeader("Cache-Control", "no-store");
-  res.type("html").send(html("return"));
-});
+// The payment service used to render a standalone purchase page here. Keep the
+// URL compatible for bookmarks and configured legacy links, but always send
+// users to the current authenticated Vue purchase experience.
+app.get("/purchase", (req, res) => redirectToNativePurchase(req, res, "/purchase"));
+app.get("/purchase/return", (req, res) => redirectToNativePurchase(req, res, "/purchase/return"));
 
 app.get("/admin/user-discounts", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
@@ -2197,7 +2209,7 @@ app.post("/pay-api/orders", async (req, res) => {
       balanceAmount:
         sku.type === "balance" || sku.type === "traffic"
           ? parseOptionalNumber(sku.balance_amount ?? sku.daily_quota_bonus_usd)
-          : parseOptionalNumber(sku.topup_balance_amount),
+          : null,
       amountCents,
       originalAmountCents,
       discountPercent,
@@ -2233,7 +2245,7 @@ app.post("/pay-api/orders", async (req, res) => {
           ],
         );
       },
-      createTradingOrder,
+      createTradingOrder: (order, orderSku) => createTradingOrder(order, orderSku, token),
       storeTradingSuccess: async (draft, createdTrading) => {
         const { rows } = await client.query(
           `
