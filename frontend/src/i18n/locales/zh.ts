@@ -408,6 +408,7 @@ export default {
     pointsMall: '积分商城',
     profile: '个人资料',
     users: '用户管理',
+    points: '用户积分',
     groups: '分组管理',
     subscriptions: '订阅管理',
     accounts: '账号管理',
@@ -1168,6 +1169,18 @@ export default {
 
   // Admin
   admin: {
+    points: {
+      title: '用户积分',
+      description: '查看所有用户的积分余额、累计获得和累计消耗情况。',
+      account: '账号',
+      current: '当前积分',
+      earned: '累计获得',
+      spent: '累计消耗',
+      updatedAt: '更新时间',
+      searchPlaceholder: '搜索邮箱、用户名或用户 ID',
+      empty: '暂无积分账户',
+      loadFailed: '积分数据加载失败'
+    },
     // Dashboard
     dashboard: {
       title: '管理控制台',

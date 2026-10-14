@@ -122,6 +122,10 @@ export default defineConfig(({ mode }) => {
           target: rewardsBackendUrl,
           changeOrigin: true
         },
+        '/admin/points': {
+          target: rewardsBackendUrl,
+          changeOrigin: true
+        },
         '/api/points': {
           target: rewardsBackendUrl,
           changeOrigin: true

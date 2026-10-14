@@ -547,6 +547,7 @@ const adminNavItems = computed((): NavItem[] => {
       ? [{ path: '/admin/ops', label: t('nav.ops'), icon: ChartIcon }]
       : []),
     { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, hideInSimpleMode: true },
+    { path: '/admin/points', label: t('nav.points'), icon: GiftIcon, hideInSimpleMode: true },
     { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon, hideInSimpleMode: true },
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     { path: '/admin/orders', label: t('nav.orders'), icon: RechargeSubscriptionIcon },
@@ -615,6 +616,7 @@ const knownMenuPaths = computed<Record<string, string>>(() =>
         [t('nav.dashboard')]: '/admin/dashboard',
         [t('nav.ops')]: '/admin/ops',
         [t('nav.users')]: '/admin/users',
+        [t('nav.points')]: '/admin/points',
         [t('nav.groups')]: '/admin/groups',
         [t('nav.subscriptions')]: '/admin/subscriptions',
         [t('nav.orders')]: '/admin/orders',
@@ -648,6 +650,7 @@ const menuPathWhitelist = computed<Set<string>>(() =>
         '/admin/dashboard',
         '/admin/ops',
         '/admin/users',
+        '/admin/points',
         '/admin/groups',
         '/admin/subscriptions',
         '/admin/orders',

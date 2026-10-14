@@ -412,6 +412,7 @@ export default {
     pointsMall: 'Points Mall',
     profile: 'Profile',
     users: 'Users',
+    points: 'User Points',
     groups: 'Groups',
     subscriptions: 'Subscriptions',
     accounts: 'Accounts',
@@ -1167,6 +1168,18 @@ export default {
 
   // Admin
   admin: {
+    points: {
+      title: 'User Points',
+      description: 'View point balances, earnings, and spending for all users.',
+      account: 'Account',
+      current: 'Current points',
+      earned: 'Total earned',
+      spent: 'Total spent',
+      updatedAt: 'Updated at',
+      searchPlaceholder: 'Search email, username, or user ID',
+      empty: 'No point accounts found',
+      loadFailed: 'Failed to load point accounts'
+    },
     // Dashboard
     dashboard: {
       title: 'Admin Dashboard',

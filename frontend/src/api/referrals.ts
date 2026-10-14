@@ -127,6 +127,24 @@ export interface AdminReferralListResponse {
   actor?: string | null
 }
 
+export interface AdminPointsAccount {
+  user_id: number
+  email?: string | null
+  username?: string | null
+  balance: number
+  total_earned: number
+  total_spent: number
+  updated_at: string
+}
+
+export interface AdminPointsAccountsResponse {
+  page: number
+  page_size: number
+  total: number
+  items: AdminPointsAccount[]
+  actor?: string | null
+}
+
 interface AxiosLikeError {
   response?: { status?: number }
   status?: number
@@ -196,6 +214,17 @@ export async function getPointsLedger(page = 1, pageSize = 20): Promise<PointsLe
   return data
 }
 
+export async function getAdminPointsAccounts(
+  page = 1,
+  pageSize = 20,
+  account = ''
+): Promise<AdminPointsAccountsResponse> {
+  const { data } = await rewardsClient.get<AdminPointsAccountsResponse>('/api/points/admin/accounts', {
+    params: { page, page_size: pageSize, account: account.trim() || undefined }
+  })
+  return data
+}
+
 export async function getRedemptionCatalog(): Promise<RedemptionCatalogItem[]> {
   const { data } = await rewardsClient.get<{ items: RedemptionCatalogItem[] }>(
     '/api/redemptions/catalog'
@@ -217,7 +246,8 @@ export const referralsAPI = {
   getPointsLedger,
   getRedemptionCatalog,
   redeemWithPoints,
-  getAdminReferrals
+  getAdminReferrals,
+  getAdminPointsAccounts
 }
 
 export default referralsAPI

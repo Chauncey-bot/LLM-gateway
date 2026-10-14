@@ -1512,33 +1512,78 @@ app.get(["/admin/referrals", "/api/admin/referrals", "/api/referral/admin/referr
   }
 });
 
-app.get("/admin/points/accounts", async (req, res) => {
+app.get(["/admin/points/accounts", "/api/points/admin/accounts"], async (req, res) => {
   const admin = await ensureAdmin(req, res);
   if (!admin) return;
 
   const page = Math.max(1, parseInteger(req.query.page) || 1);
   const pageSize = Math.min(100, Math.max(1, parseInteger(req.query.page_size) || 20));
   const offset = (page - 1) * pageSize;
+  const account = String(req.query.account || req.query.search || '').trim();
 
   try {
+    let accountIds = null;
+    if (account && !/^\d+$/.test(account)) {
+      const accountLike = `%${account}%`;
+      if (mainUserPool) {
+        const result = await mainUserPool.query(
+          `SELECT id FROM users WHERE deleted_at IS NULL AND (email ILIKE $1 OR username ILIKE $1) LIMIT 100`,
+          [accountLike],
+        );
+        accountIds = result.rows.map((row) => Number(row.id));
+      } else {
+        try {
+          const result = await sub2apiAdminJson(`/api/v1/admin/users?search=${encodeURIComponent(account)}&page=1&page_size=100`);
+          const items = Array.isArray(result?.items) ? result.items : Array.isArray(result?.users) ? result.users : [];
+          accountIds = items.map((item) => Number(item.id)).filter(Number.isInteger);
+        } catch {
+          accountIds = [];
+        }
+      }
+    }
+    const accountFilter = account
+      ? `AND pa.user_id = ANY($3::bigint[])`
+      : '';
+    const countFilter = account
+      ? `AND pa.user_id = ANY($1::bigint[])`
+      : '';
+    const accountParams = account
+      ? [pageSize, offset, accountIds || [Number(account)]]
+      : [pageSize, offset];
     const [itemsResult, totalResult] = await Promise.all([
       pool.query(
         `
-        SELECT user_id, balance, total_earned, total_spent, updated_at
-        FROM points_accounts
-        ORDER BY balance DESC, user_id DESC
+        SELECT pa.user_id, pa.balance, pa.total_earned, pa.total_spent, pa.updated_at
+        FROM points_accounts pa
+        WHERE 1 = 1 ${accountFilter}
+        ORDER BY pa.balance DESC, pa.user_id DESC
         LIMIT $1 OFFSET $2
         `,
-        [pageSize, offset],
+        accountParams,
       ),
-      pool.query(`SELECT COUNT(*)::int AS count FROM points_accounts`),
+      pool.query(
+        `SELECT COUNT(*)::int AS count FROM points_accounts pa WHERE 1 = 1 ${countFilter}`,
+        account ? [accountIds || [Number(account)]] : [],
+      ),
     ]);
+
+    const items = await Promise.all(itemsResult.rows.map(async (row) => {
+      let identity = {};
+      try {
+        const data = await sub2apiAdminJson(`/api/v1/admin/users/${Number(row.user_id)}`);
+        const candidate = data?.user || data;
+        identity = { email: candidate?.email || null, username: candidate?.username || null };
+      } catch {
+        // The points account remains useful when the identity API is unavailable.
+      }
+      return { ...row, ...identity };
+    }));
 
     res.json({
       page,
       page_size: pageSize,
       total: Number(totalResult.rows[0]?.count || 0),
-      items: itemsResult.rows,
+      items,
       actor: admin.email || null,
     });
   } catch (error) {
