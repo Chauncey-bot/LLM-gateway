@@ -1,3 +1,4 @@
-handle_path /api/v1/subscriptions/*/reset-quota /v1/subscriptions/*/reset-quota {
+@resetQuota path /api/v1/subscriptions/*/reset-quota /v1/subscriptions/*/reset-quota /api/v1/admin/subscriptions/*/reset-quota /v1/admin/subscriptions/*/reset-quota
+handle @resetQuota {
   reverse_proxy 127.0.0.1:18192
 }

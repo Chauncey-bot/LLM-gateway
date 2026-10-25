@@ -6,6 +6,9 @@ COPY subscription-reset-service/package*.json ./
 RUN npm ci --omit=dev
 
 COPY subscription-reset-service/server.mjs ./
+COPY subscription-reset-service/admin-reset.mjs ./
+COPY subscription-reset-service/reset-store.mjs ./
+COPY subscription-reset-service/subscription-cache.mjs ./
 COPY subscription-reset-service/plan-policy.mjs ./
 COPY zhisales-pay-service/catalog.json ./plan-catalog.json
 ENV PLAN_CATALOG_PATH=/app/plan-catalog.json

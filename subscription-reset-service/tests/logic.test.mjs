@@ -7,6 +7,7 @@ import {
   normalizeRemainingMs,
   ServiceError,
   getDailyWindowStart,
+  getDatabaseNow,
   parseIntId,
   resetDueDailySubscriptionQuotas,
   startOfDay,
@@ -95,7 +96,21 @@ test("getDailyWindowStart delegates midnight calculation to PostgreSQL in the co
   assert.deepStrictEqual(calls[0].params, ["Asia/Shanghai"]);
 });
 
-test("daily reset job finds due multi-day subscriptions and uses the upstream reset API", async () => {
+test("getDatabaseNow uses the database clock for a manual reset boundary", async () => {
+  const calls = [];
+  const resetAt = "2026-10-16T13:21:45.123Z";
+  const value = await getDatabaseNow({
+    async query(sql, params) {
+      calls.push({ sql, params });
+      return { rows: [{ reset_at: resetAt }] };
+    },
+  });
+
+  assert.equal(value, resetAt);
+  assert.deepStrictEqual(calls, [{ sql: "SELECT clock_timestamp()::text AS reset_at", params: undefined }]);
+});
+
+test("daily reset job finds due subscriptions and delegates to the shared reset operation", async () => {
   const calls = [];
   const resetCalls = [];
   let released = false;

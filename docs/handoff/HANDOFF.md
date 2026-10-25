@@ -171,12 +171,16 @@ immediately afterward.
 
 ### Subscription quota reset service
 
-- Handles only the user-facing quota-reset paths listed in section 6.
-- Authenticates the user and subscription ownership, requires at least 24
-  remaining hours, resets selected daily/weekly/monthly quota through `sub2api`
-  admin APIs, then applies a one-day extension reduction.
-- Admin quota reset routes remain with `sub2api`; do not route those through
-  this service.
+- Handles the user quota-reset paths and `/api/v1/admin/subscriptions/:id/reset-quota`
+  (also `/v1/admin/subscriptions/:id/reset-quota`) before the generic API handler.
+- User resets verify ownership and at least 24 remaining hours, then atomically
+  reset the daily quota and deduct one day of validity.
+- Admin resets retain upstream administrator authorization. Managed daily plans
+  commit counters and windows together under a per-subscription PostgreSQL lock.
+- Durable reset receipts recover pending work after failures or restarts; cache
+  retries never repeat committed quota resets or user validity deductions.
+- See `subscription-reset-service/README.md` and
+  `docs/release/管理员重置并发与补偿修复-20261025.md` for deployment and verification.
 
 ## 8. Configuration and secret inventory
 

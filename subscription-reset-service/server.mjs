@@ -2,6 +2,9 @@ import express from "express";
 import pg from "pg";
 import { fileURLToPath } from "node:url";
 import { dailyFixedGroupIds, assertDailyFixedReset } from "./plan-policy.mjs";
+import { installAdminResetRoute } from "./admin-reset.mjs";
+import { ResetStore, lockSubscription } from "./reset-store.mjs";
+import { subscriptionInvalidator } from "./subscription-cache.mjs";
 
 const { Pool } = pg;
 const MINIMUM_REMAINING_HOURS = 24;
@@ -49,10 +52,16 @@ const sub2apiAdminSession = {
 
 const app = express();
 const pool = new Pool(config.db);
+const resetStore = new ResetStore({ db: pool, invalidate: subscriptionInvalidator(), dailyFixedGroupIds, timeZone: config.dailyResetTimeZone });
 let dailyQuotaResetTimer = null;
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "256kb" }));
+installAdminResetRoute(app, {
+  store: resetStore,
+  upstreamBaseUrl: config.sub2apiBaseUrl,
+  dailyFixedGroupIds,
+});
 
 function nowIso() {
   return new Date().toISOString();
@@ -72,14 +81,20 @@ async function getDailyWindowStart(client = pool) {
   return result.rows[0]?.window_start;
 }
 
+async function getDatabaseNow(client = pool) {
+  const result = await client.query("SELECT clock_timestamp()::text AS reset_at");
+  return result.rows[0]?.reset_at;
+}
+
 /**
  * Restores every due daily-fixed subscription to its plan's daily baseline.
  *
  * The upstream gateway only advances subscription windows lazily when a user
  * makes a request. This job makes the business rule explicit: every active
  * daily-fixed subscription starts a new daily window at China midnight, whether
- * or not the user sends a request after midnight. The actual reset goes
- * through the upstream admin API so its subscription caches are invalidated.
+ * or not the user sends a request after midnight. Reset uses the same atomic
+ * store as manual resets, with durable cache
+ * invalidation and a locked recheck of the midnight boundary.
  */
 async function resetDueDailySubscriptionQuotas({
   db = pool,
@@ -297,26 +312,9 @@ async function sub2apiAdminJson(pathname, options = {}) {
 }
 
 async function resetSubscriptionDailyQuota(subscriptionId) {
-  const normalizedSubscriptionId = Number(subscriptionId);
-  const result = await sub2apiAdminJson(`/api/v1/admin/subscriptions/${normalizedSubscriptionId}/reset-quota`, {
-    method: "POST",
-    body: { daily: true },
-  });
-
-  // The upstream service runs in UTC and writes its local midnight (08:00 in
-  // China) to daily_window_start. Normalize it after the upstream reset so
-  // both the actual quota window and every countdown use China midnight.
-  const windowStart = await getDailyWindowStart();
-  if (!windowStart) {
-    throw new ServiceError(500, "Unable to determine daily quota window start");
-  }
-  await pool.query(
-    `UPDATE user_subscriptions
-     SET daily_window_start = $2, updated_at = NOW()
-     WHERE id = $1 AND deleted_at IS NULL`,
-    [normalizedSubscriptionId, windowStart],
-  );
-  return result;
+  const operation = await resetStore.enqueue(Number(subscriptionId), { daily: true, weekly: false, monthly: false }, { kind: "daily" });
+  await resetStore.run(Number(subscriptionId));
+  return resetStore.get(operation.operation_id);
 }
 
 async function payServiceAdminJson(pathname, options = {}) {
@@ -424,6 +422,7 @@ async function resetQuotaAndShortenSubscription(subscriptionId, userId, resetReq
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await lockSubscription(client, subscriptionId);
     const locked = await client.query(
       `SELECT id, user_id, group_id, status, expires_at
        FROM user_subscriptions
@@ -450,9 +449,9 @@ async function resetQuotaAndShortenSubscription(subscriptionId, userId, resetReq
       throw new ServiceError(409, `Subscription must remain active for at least ${config.minimumRemainingHours} hours`);
     }
 
-    const todayStart = await getDailyWindowStart(client);
-    if (!todayStart) {
-      throw new ServiceError(500, "Unable to determine daily quota window start");
+    const resetAt = await getDatabaseNow(client);
+    if (!resetAt) {
+      throw new ServiceError(500, "Unable to determine daily quota reset time");
     }
     const updated = await client.query(
       `UPDATE user_subscriptions
@@ -465,13 +464,16 @@ async function resetQuotaAndShortenSubscription(subscriptionId, userId, resetReq
            expires_at = expires_at - INTERVAL '24 hours',
            updated_at = NOW()
        WHERE id = $1
-       RETURNING id, user_id, status, expires_at, daily_usage_usd, weekly_usage_usd, monthly_usage_usd`,
-      [subscriptionId, resetRequest.daily, resetRequest.weekly, resetRequest.monthly, todayStart]
+       RETURNING *`,
+      [subscriptionId, resetRequest.daily, resetRequest.weekly, resetRequest.monthly, resetAt]
     );
     if (resetRequest.daily) {
       await resetActiveTrafficPacksForUser(Number(subscription.user_id));
     }
+    const receipt = await resetStore.receipt(client, updated.rows[0], resetRequest, resetAt);
     await client.query("COMMIT");
+    // Delivery is also retried after restart. It never repeats the 24h charge.
+    void resetStore.deliver(receipt.operation_id).catch(() => {});
     return updated.rows[0];
   } catch (error) {
     await client.query("ROLLBACK");
@@ -489,13 +491,17 @@ function parseIntId(value) {
   return id;
 }
 
-app.get(["/api/v1/health", "/v1/health", "/health"], (_req, res) => {
-  res.json({
-    service: "subscription-reset-service",
-    ok: true,
-    timestamp: nowIso(),
-    mode: "standalone",
-  });
+app.get(["/api/v1/health", "/v1/health", "/health"], async (_req, res) => {
+  try {
+    const recovery = await resetStore.health();
+    res.json({
+      service: "subscription-reset-service",
+      ok: true,
+      timestamp: nowIso(),
+      mode: "standalone",
+      recovery,
+    });
+  } catch { res.status(503).json({ service: "subscription-reset-service", ok: false }); }
 });
 
 app.post(["/api/v1/subscriptions/:id/reset-quota", "/v1/subscriptions/:id/reset-quota"], async (req, res) => {
@@ -518,7 +524,9 @@ app.post(["/api/v1/subscriptions/:id/reset-quota", "/v1/subscriptions/:id/reset-
   }
 });
 
-function startServer() {
+async function startServer() {
+  await resetStore.ensure();
+  resetStore.start();
   startDailyQuotaResetPoller();
   const server = app.listen(config.port, () => {
     console.log(`[subscription-reset-service] listening on http://0.0.0.0:${config.port}`);
@@ -528,7 +536,7 @@ function startServer() {
 
 const currentFile = fileURLToPath(import.meta.url);
 if (process.argv[1] === currentFile) {
-  startServer();
+  startServer().catch(() => { console.error("Subscription reset service initialization failed"); process.exitCode = 1; });
 }
 
 export {
@@ -538,6 +546,7 @@ export {
   MINIMUM_REMAINING_HOURS,
   resetDueDailySubscriptionQuotas,
   getDailyWindowStart,
+  getDatabaseNow,
   startOfDay,
   startDailyQuotaResetPoller,
   normalizeResetWindowRequest,
